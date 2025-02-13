@@ -12,7 +12,9 @@ A powerful tool for indexing and semantically searching codebases using embeddin
   - OpenAI (`text-embedding-ada-002`)
   - LM Studio (`bge-large-en-v1.5`)
 - 📦 **Efficient Storage**:
-  - Vector database (Qdrant) for fast similarity search
+  - Automated Qdrant deployment via Docker Compose
+  - Secure API key generation
+  - Persistent vector storage
   - Incremental updates
   - File change detection
 - 🔧 **Advanced Features**:
@@ -51,12 +53,31 @@ cd code-indexer
 ```
 
 The script will:
-- Generate a secure API key for Qdrant
+- Set up Python environment and dependencies
+- Create necessary scripts and commands
+
+3. Deploy Qdrant:
+```bash
+./scripts/deploy.sh
+```
+
+The deploy script will:
+- Generate a secure random API key for Qdrant
 - Create a `.env` file with necessary configuration
-- Start Qdrant in Docker
+- Start Qdrant in Docker with persistent storage
+- Create and verify a test collection
 - Guide you through setting up required API keys
 
-### Configuration
+### Qdrant Configuration
+
+The project uses [Qdrant](https://qdrant.tech/) as its vector database, deployed automatically via Docker Compose. Our setup provides:
+
+- **Automated Deployment**: Single command deployment via `deploy.sh`
+- **Security**: Auto-generated API keys and secure configuration
+- **Persistence**: Docker volumes for reliable data storage
+- **Isolation**: Runs on ports 6550/6551 to avoid conflicts
+- **Health Checks**: Automatic verification of deployment
+- **Monitoring**: Built-in collection statistics and status
 
 The `.env` file contains all configuration options:
 
@@ -67,8 +88,8 @@ QDRANT_API_KEY=auto_generated         # Generated during setup
 
 # Qdrant Configuration
 QDRANT_HOST=localhost
-QDRANT_PORT=6335
-QDRANT_URL=http://localhost:6335
+QDRANT_PORT=6550                     # REST API
+QDRANT_URL=http://localhost:6550     # Base URL for API calls
 
 # Optional: GitHub Integration
 GITHUB_TOKEN=your_github_token          # For repository access
@@ -160,11 +181,16 @@ This will:
    - `OpenAIEmbedding`: OpenAI's text-embedding-ada-002
    - `LMStudioEmbedding`: Local embedding using bge-large-en
 
+4. **Infrastructure**:
+   - `Docker Compose`: Automated Qdrant deployment
+   - `deploy.sh`: Container and environment setup
+   - `install.sh`: Python environment and dependency management
+
 ### Data Flow
 
 1. Source code → Text chunks
 2. Chunks → Embeddings
-3. Embeddings → Vector database
+3. Embeddings → Vector database (Qdrant)
 4. Search query → Query embedding
 5. Query embedding → Similar code snippets
 
@@ -188,9 +214,12 @@ This will:
 ### Common Issues
 
 1. **Qdrant Connection Failed**
-   - Check if Docker is running
-   - Verify Qdrant container status: `docker ps`
-   - Confirm port availability: `netstat -an | grep 6335`
+   - Check if Docker is running: `docker ps`
+   - Verify Qdrant container status: `docker logs index-db`
+   - Check container ports: `docker port index-db`
+   - Confirm port availability: `netstat -an | grep 6550`
+   - Restart container: `docker compose restart qdrant`
+   - Check logs: `index logs`
 
 2. **OpenAI API Issues**
    - Verify API key in `.env`
