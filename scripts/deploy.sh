@@ -124,10 +124,45 @@ echo -e "API Key: ${QDRANT_API_KEY}"
 print_step "Checking Qdrant collections..."
 COLLECTIONS=$(curl -s -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections")
 if [ "$(echo "$COLLECTIONS" | jq '.result | length')" -eq 0 ]; then
-    echo "No collections found - ready for initialization!"
+    print_step "Creating test collection..."
+    # Create a test collection
+    curl -X PUT "${QDRANT_URL}/collections/test" \
+        -H "api-key: ${QDRANT_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "vectors": {
+                "size": 4,
+                "distance": "Dot"
+            }
+        }'
+    
+    # Add a test point
+    curl -X PUT "${QDRANT_URL}/collections/test/points?wait=true" \
+        -H "api-key: ${QDRANT_API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "points": [
+                {
+                    "id": 1,
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "payload": {
+                        "name": "test-point",
+                        "description": "Created during deployment to verify Qdrant is working"
+                    }
+                }
+            ]
+        }'
+    
+    print_step "Test collection created successfully!"
+    echo -e "You can now run: ${GREEN}curl -H \"api-key: ${QDRANT_API_KEY}\" \"${QDRANT_URL}/collections/test\"${NC}"
 else
     echo "Existing collections:"
-    echo "$COLLECTIONS" | jq -r '.result[] | "- \(.name) (\(.vectors_count) vectors)"'
+    for collection in $(echo "$COLLECTIONS" | jq -r '.result[].name'); do
+        # Get collection info including vector count
+        collection_info=$(curl -s -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections/${collection}")
+        vector_count=$(echo "$collection_info" | jq '.result.vectors_count')
+        echo "- ${collection} (${vector_count} vectors)"
+    done
 fi
 
 # Check disk usage
