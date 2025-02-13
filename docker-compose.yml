@@ -8,7 +8,11 @@ services:
       - "6550:6333"  # REST API (host:container)
       - "6551:6334"  # GRPC API (host:container)
     volumes:
-      - ./qdrant_storage:/qdrant/storage
+      - qdrant_storage:/qdrant/storage
     environment:
       - QDRANT_API_KEY=${QDRANT_API_KEY}
-    restart: unless-stopped 
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:
+    name: index-db-storage 
