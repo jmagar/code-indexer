@@ -21,91 +21,33 @@ print_error() {
     echo -e "${RED}Error:${NC} $1"
 }
 
-# Repository information
-REPO_URL="https://github.com/jmagar/code-indexer.git"
-INSTALL_DIR="code-indexer"
-
-# Function to check dependencies
-check_dependencies() {
-    # Check if git is installed
-    if ! command -v git &> /dev/null; then
-        print_error "Git is not installed. Please install Git first."
-        exit 1
-    fi
-
-    # Check if Docker is installed
-    if ! command -v docker &> /dev/null; then
-        print_error "Docker is not installed. Please install Docker first."
-        exit 1
-    fi
-
-    # Check Docker Compose by trying to run it
-    if ! docker compose version &> /dev/null; then
-        print_error "Docker Compose (V2) is not available. Please install Docker Compose V2."
-        exit 1
-    fi
-}
-
-# Function to update the repository
-update_repo() {
-    if [ ! -d "$INSTALL_DIR" ]; then
-        print_error "Code Indexer is not installed. Please run the install script without --update first."
-        exit 1
-    fi
-
-    print_step "Updating Code Indexer..."
-    cd "$INSTALL_DIR" || exit 1
-    
-    # Fetch latest changes
-    git fetch origin main
-    
-    # Check if we're behind the remote
-    if [ "$(git rev-list HEAD..origin/main --count)" != "0" ]; then
-        print_step "New updates available, applying..."
-        
-        # Stash any local changes
-        if ! git diff --quiet; then
-            print_warning "Stashing local changes..."
-            git stash
-        fi
-        
-        # Pull latest changes
-        git pull origin main
-        
-        # Update dependencies
-        print_step "Updating dependencies..."
-        # shellcheck source=/dev/null
-        source .venv/bin/activate
-        uv pip install -r requirements.txt
-        
-        print_step "Update complete! 🎉"
-        echo -e "${GREEN}Code Indexer has been updated to the latest version${NC}"
-    else
-        echo -e "${GREEN}Code Indexer is already up to date!${NC}"
-    fi
-    exit 0
+# Function to update dependencies
+update_deps() {
+    print_step "Updating dependencies..."
+    # shellcheck source=/dev/null
+    source .venv/bin/activate
+    uv pip install -r requirements.txt
 }
 
 # Parse command line arguments
 if [ "$1" == "--update" ]; then
-    update_repo
+    if [ ! -f "requirements.txt" ]; then
+        print_error "requirements.txt not found. Are you in the code-indexer directory?"
+        exit 1
+    fi
+    update_deps
+    print_step "Update complete! 🎉"
+    echo -e "${GREEN}Dependencies have been updated to the latest version${NC}"
+    exit 0
 fi
 
-# Main installation
-check_dependencies
-
-if [ -d "$INSTALL_DIR" ]; then
-    print_warning "Existing installation found at ./$INSTALL_DIR"
-    print_warning "To update, run: $0 --update"
+# Check if we're in the right directory
+if [ ! -f "requirements.txt" ]; then
+    print_error "requirements.txt not found. Are you in the code-indexer directory?"
     exit 1
 fi
 
-print_step "Installing Code Indexer..."
-
-# Clone repository
-print_step "Cloning repository..."
-git clone "$REPO_URL" "$INSTALL_DIR"
-cd "$INSTALL_DIR" || exit 1
+print_step "Setting up Python environment..."
 
 # Install uv if not already installed
 print_step "Installing/updating uv..."
@@ -126,24 +68,6 @@ source .venv/bin/activate
 # Install dependencies using uv
 print_step "Installing dependencies..."
 uv pip install -r requirements.txt
-
-# Start Qdrant using Docker Compose
-print_step "Starting Qdrant..."
-if [ ! -f .env ]; then
-    print_step "Creating .env file..."
-    if [ ! -f .env.example ]; then
-        echo "Error: .env.example file not found"
-        exit 1
-    fi
-    cp .env.example .env
-    echo "Please edit .env file with your API keys before continuing"
-    exit 0
-fi
-
-docker compose up -d qdrant
-
-print_step "Waiting for Qdrant to start..."
-sleep 5
 
 # Create shell script for the index command
 print_step "Creating index command..."
@@ -178,11 +102,9 @@ if [[ -n "$SHELL_RC" ]]; then
 fi
 
 print_step "Installation complete! 🎉"
-echo -e "${GREEN}You can now:"
-echo -e "1. Edit .env file with your API keys (if you haven't already)"
-echo -e "2. Restart your terminal or run: source $SHELL_RC"
-echo -e "3. Run the indexer using the 'index' command:"
-echo -e "   index search \"your query\""
-echo -e "   index ingest github https://github.com/user/repo"
-echo -e "   index ingest local /path/to/code"
-echo -e "\nTo update in the future, run: ./scripts/install.sh --update${NC}" 
+echo -e "${GREEN}Next steps:"
+echo -e "1. Run the deployment script to start Qdrant:"
+echo -e "   ${BLUE}./scripts/deploy.sh${NC}"
+echo -e "2. Edit .env file with your API keys"
+echo -e "3. Restart your terminal or run: source $SHELL_RC"
+echo -e "\nTo update dependencies in the future, run: ./scripts/install.sh --update${NC}" 
