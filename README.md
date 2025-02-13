@@ -45,19 +45,11 @@ cd code-indexer
 ./scripts/install.sh
 ```
 
-This will:
-1. Set up Python environment using `uv` (fast package installer)
-2. Install all dependencies
-3. Create a global `index` command
-4. Start Qdrant in Docker
-5. Guide you through configuration
-
-### Alternative: One-Line Installation
-
-```bash
-# Coming soon
-curl -fsSL https://raw.githubusercontent.com/jmagar/code-indexer/main/scripts/install.sh | bash
-```
+The script will:
+- Generate a secure API key for Qdrant
+- Create a `.env` file with necessary configuration
+- Start Qdrant in Docker
+- Guide you through setting up required API keys
 
 ### Configuration
 
