@@ -159,8 +159,8 @@ else
     echo "Existing collections:"
     for collection in $(echo "$COLLECTIONS" | jq -r '.result[].name'); do
         # Get collection info including vector count
-        collection_info=$(curl -s -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections/${collection}")
-        vector_count=$(echo "$collection_info" | jq '.result.vectors_count')
+        collection_info=$(curl -s -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections/${collection}/points/count")
+        vector_count=$(echo "$collection_info" | jq '.result.count')
         echo "- ${collection} (${vector_count} vectors)"
     done
 fi
