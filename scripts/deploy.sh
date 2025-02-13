@@ -123,7 +123,7 @@ echo -e "API Key: ${QDRANT_API_KEY}"
 
 print_step "Checking Qdrant collections..."
 COLLECTIONS=$(curl -s -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections")
-if [ "$(echo "$COLLECTIONS" | jq '.result | length')" -eq 0 ]; then
+if [ "$(echo "$COLLECTIONS" | jq '.result.collections | length')" -eq 0 ]; then
     print_step "Creating test collection..."
     # Create a test collection
     curl -X PUT "${QDRANT_URL}/collections/test" \
@@ -157,7 +157,7 @@ if [ "$(echo "$COLLECTIONS" | jq '.result | length')" -eq 0 ]; then
     echo -e "You can now run: ${GREEN}curl -H \"api-key: ${QDRANT_API_KEY}\" \"${QDRANT_URL}/collections/test\"${NC}"
 else
     echo "Existing collections:"
-    for collection in $(echo "$COLLECTIONS" | jq -r '.result[].name'); do
+    for collection in $(echo "$COLLECTIONS" | jq -r '.result.collections[].name'); do
         # Get collection info including vector count
         collection_info=$(curl -s -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections/${collection}/points/count")
         vector_count=$(echo "$collection_info" | jq '.result.count')
