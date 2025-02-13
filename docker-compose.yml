@@ -5,8 +5,8 @@ services:
     container_name: index-db
     image: qdrant/qdrant:latest
     ports:
-      - "6335:6333"  # REST API (host:container)
-      - "6336:6334"  # GRPC API (host:container)
+      - "6550:6333"  # REST API (host:container)
+      - "6551:6334"  # GRPC API (host:container)
     volumes:
       - ./qdrant_storage:/qdrant/storage
     environment:

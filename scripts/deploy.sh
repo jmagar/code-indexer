@@ -34,7 +34,7 @@ fi
 
 # Set Qdrant host and port
 QDRANT_HOST="localhost"
-QDRANT_PORT="6335"
+QDRANT_PORT="6550"
 QDRANT_URL="http://${QDRANT_HOST}:${QDRANT_PORT}"
 
 # Create .env if it doesn't exist
