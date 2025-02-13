@@ -32,7 +32,12 @@ A powerful tool for indexing and semantically searching codebases using embeddin
 
 ## Quick Start
 
-### Local Installation
+### One-Line Installation
+```bash
+curl -sSL https://raw.githubusercontent.com/jmagar/code-indexer/main/bootstrap.sh | bash
+```
+
+### Manual Installation
 
 1. Clone the repository:
 ```bash
