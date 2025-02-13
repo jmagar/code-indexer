@@ -6,6 +6,9 @@ import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
+from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.console import Console
+from rich import print as rprint
 
 # Add the current directory to Python path
 script_dir = Path(__file__).parent
@@ -22,6 +25,12 @@ from plugins import (
 from plugins.embeddings import LMStudioEmbedding, OpenAIEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from plugins.analysis.syntax_search import TreeSitterSearch
+from plugins.search.combined_search import CombinedSearchPlugin
+from pygments import highlight
+from pygments.formatters import Terminal256Formatter
+from pygments.lexers import get_lexer_for_filename, TextLexer
+from plugins.colors import NordStyle
 
 # Load environment variables
 load_dotenv()
@@ -305,27 +314,28 @@ class CodeProcessor:
     async def process_source(self, source: CodeSourcePlugin) -> None:
         """Process code from a source plugin."""
         try:
-            logger.info(f"Processing source: {source.name}")
+            console = Console()
+            console.print(f"[bold #81A1C1]Processing source:[/] [#88C0D0]{source.name}[/]")
             start_time = asyncio.get_event_loop().time()
 
             # Prepare the source
-            logger.info("Preparing source...")
+            console.print("[bold #8FBCBB]Preparing source...[/]")
             await source.prepare()
 
             # Get all files
-            logger.info("Getting files...")
+            console.print("[bold #8FBCBB]Getting files...[/]")
             current_files = await source.get_files()
             current_file_paths = {str(f) for f in current_files}
-            logger.info(f"Found {len(current_files)} files to process")
+            console.print(f"[#88C0D0]Found[/] [bold #A3BE8C]{len(current_files)}[/] [#88C0D0]files to process[/]")
 
             # Get existing file hashes
             existing_hashes = self._get_existing_file_hashes(source.name)
-            logger.info(f"Found {len(existing_hashes)} existing files in index")
+            console.print(f"[#88C0D0]Found[/] [bold #A3BE8C]{len(existing_hashes)}[/] [#88C0D0]existing files in index[/]")
 
             # Delete removed files from Qdrant
             removed_files = set(existing_hashes.keys()) - current_file_paths
             if removed_files:
-                logger.info(f"Removing {len(removed_files)} deleted files from index")
+                console.print(f"[#88C0D0]Removing[/] [bold #BF616A]{len(removed_files)}[/] [#88C0D0]deleted files from index[/]")
                 for filepath in removed_files:
                     self.qdrant_client.delete(
                         collection_name=COLLECTION_NAME,
@@ -347,68 +357,96 @@ class CodeProcessor:
             files_to_process = []
             files_unchanged = 0
 
-            # Check which files need processing
-            for file in current_files:
-                try:
-                    file_path_str = str(file)
-                    current_hash = self._compute_file_hash(file)
+            # Progress bar for file processing
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(complete_style="#88C0D0", finished_style="#A3BE8C"),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+                process_task = progress.add_task("[bold #81A1C1]Processing files...", total=len(current_files))
+                
+                # Check which files need processing
+                for file in current_files:
+                    try:
+                        file_path_str = str(file)
+                        current_hash = self._compute_file_hash(file)
 
-                    if file_path_str in existing_hashes:
-                        if existing_hashes[file_path_str] == current_hash:
-                            files_unchanged += 1
-                            continue
-                        else:
-                            # Delete old version of changed file
-                            logger.info(f"File changed: {file_path_str}")
-                            self.qdrant_client.delete(
-                                collection_name=COLLECTION_NAME,
-                                points_selector=models.Filter(
-                                    must=[
-                                        models.FieldCondition(
-                                            key="metadata.filepath",
-                                            match=models.MatchValue(
-                                                value=file_path_str
+                        if file_path_str in existing_hashes:
+                            if existing_hashes[file_path_str] == current_hash:
+                                files_unchanged += 1
+                                progress.advance(process_task)
+                                continue
+                            else:
+                                # Delete old version of changed file
+                                console.print(f"[#88C0D0]File changed:[/] [italic #81A1C1]{file_path_str}[/]")
+                                self.qdrant_client.delete(
+                                    collection_name=COLLECTION_NAME,
+                                    points_selector=models.Filter(
+                                        must=[
+                                            models.FieldCondition(
+                                                key="metadata.filepath",
+                                                match=models.MatchValue(value=file_path_str),
                                             ),
-                                        ),
-                                        models.FieldCondition(
-                                            key="metadata.source",
-                                            match=models.MatchValue(value=source.name),
-                                        ),
-                                    ]
-                                ),
-                            )
+                                            models.FieldCondition(
+                                                key="metadata.source",
+                                                match=models.MatchValue(value=source.name),
+                                            ),
+                                        ]
+                                    ),
+                                )
 
-                    # Add file to processing list
-                    with open(file, "r", encoding="utf-8") as f:
-                        content = f.read()
+                        # Add file to processing list
+                        with open(file, "r", encoding="utf-8") as f:
+                            content = f.read()
 
-                    # Create chunks with file hash
-                    chunks = self.create_chunks(content, file_path_str, source.name)
-                    for chunk in chunks:
-                        chunk["metadata"]["file_hash"] = current_hash
+                        # Create chunks with file hash
+                        chunks = self.create_chunks(content, file_path_str, source.name)
+                        for chunk in chunks:
+                            chunk["metadata"]["file_hash"] = current_hash
 
-                    files_to_process.extend(chunks)
-                    logger.info(f"New file: {file_path_str}")
+                        files_to_process.extend(chunks)
+                        console.print(f"[#88C0D0]New file:[/] [italic #81A1C1]{file_path_str}[/]")
+                        progress.advance(process_task)
 
-                except Exception as e:
-                    logger.error(f"Error processing file {file}: {e}")
-                    continue
+                    except Exception as e:
+                        console.print(f"[bold #BF616A]Error processing file {file}:[/] [italic #BF616A]{e}[/]")
+                        progress.advance(process_task)
+                        continue
 
-            logger.info(f"Files unchanged: {files_unchanged}")
-            logger.info(f"Files to process: {len(files_to_process)}")
+            console.print(f"[#88C0D0]Files unchanged:[/] [bold #A3BE8C]{files_unchanged}[/]")
+            console.print(f"[#88C0D0]Files to process:[/] [bold #A3BE8C]{len(files_to_process)}[/]")
 
             if not files_to_process:
-                logger.info("No files need processing")
+                console.print("[bold #A3BE8C]No files need processing[/]")
                 return
 
             # Get embeddings in batches
-            logger.info("Generating embeddings...")
+            console.print("[bold #8FBCBB]Generating embeddings...[/]")
             texts = [chunk["text"] for chunk in files_to_process]
-            embeddings = await self.get_embeddings(texts)
-            logger.info(f"Generated {len(embeddings)} embeddings")
+            
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(complete_style="#88C0D0", finished_style="#A3BE8C"),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+                embedding_task = progress.add_task("[bold #81A1C1]Generating embeddings...", total=len(texts))
+                embeddings = []
+                batch_size = 50
+                
+                for i in range(0, len(texts), batch_size):
+                    batch = texts[i:i + batch_size]
+                    batch_embeddings = await self.get_embeddings(batch)
+                    embeddings.extend(batch_embeddings)
+                    progress.advance(embedding_task, len(batch))
 
-            # Store in Qdrant
-            logger.info("Storing vectors in Qdrant...")
+            console.print(f"[#88C0D0]Generated[/] [bold #A3BE8C]{len(embeddings)}[/] [#88C0D0]embeddings[/]")
+
+            # Store in Qdrant with progress bar
+            console.print("[bold #8FBCBB]Storing vectors in Qdrant...[/]")
             points = [
                 models.PointStruct(
                     id=idx,
@@ -419,42 +457,44 @@ class CodeProcessor:
                         "token_count": len(chunk["text"].split()),
                     },
                 )
-                for idx, (chunk, embedding) in enumerate(
-                    zip(files_to_process, embeddings)
-                )
+                for idx, (chunk, embedding) in enumerate(zip(files_to_process, embeddings))
             ]
 
-            # Store in batches of 100
             batch_size = 100
-            for i in range(0, len(points), batch_size):
-                batch = points[i : i + batch_size]
-                batch_num = i // batch_size + 1
-                total_batches = (len(points) + batch_size - 1) // batch_size
-                logger.info(
-                    f"Storing batch {batch_num}/{total_batches} in Qdrant ({len(batch)} points)"
-                )
-                self.qdrant_client.upsert(collection_name=COLLECTION_NAME, points=batch)
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(complete_style="#88C0D0", finished_style="#A3BE8C"),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+                store_task = progress.add_task("[bold #81A1C1]Storing vectors...", total=len(points))
+                
+                for i in range(0, len(points), batch_size):
+                    batch = points[i:i + batch_size]
+                    self.qdrant_client.upsert(collection_name=COLLECTION_NAME, points=batch)
+                    progress.advance(store_task, len(batch))
 
             # Clean up
             try:
                 await source.cleanup()
             except Exception as e:
-                logger.error(f"Error during cleanup: {e}")
+                console.print(f"[bold #BF616A]Error during cleanup:[/] [italic #BF616A]{e}[/]")
 
             # Log statistics
             total_time = asyncio.get_event_loop().time() - start_time
-            logger.info(f"Completed processing {source.name}")
-            logger.info(f"Total time: {total_time:.2f} seconds")
-            logger.info(f"Total vectors: {len(points)}")
-            logger.info(f"Vectors per second: {len(points) / total_time:.1f}")
+            console.print(f"\n[bold #A3BE8C]Processing completed![/]")
+            console.print(f"[#88C0D0]Total time:[/] [bold #81A1C1]{total_time:.2f}[/] [#88C0D0]seconds[/]")
+            console.print(f"[#88C0D0]Total vectors:[/] [bold #81A1C1]{len(points)}[/]")
+            console.print(f"[#88C0D0]Vectors per second:[/] [bold #81A1C1]{len(points) / total_time:.1f}[/]")
 
         except Exception as e:
-            logger.error(f"Error processing source {source.name}: {e}")
+            console.print(f"[bold #BF616A]Error processing source {source.name}:[/] [italic #BF616A]{e}[/]")
             # Try to clean up even if processing failed
             try:
                 await source.cleanup()
             except Exception as e:
-                logger.error(f"Error during cleanup after failure: {e}")
+                console.print(f"[bold #BF616A]Error during cleanup after failure:[/] [italic #BF616A]{e}[/]")
             raise
 
     async def search(
@@ -465,41 +505,94 @@ class CodeProcessor:
         min_score: float = 0.7,
         limit: int = 5,
     ) -> None:
-        """Search for code using the query."""
+        """Search for code using combined semantic and syntax-aware search.
+        
+        Args:
+            query: Search query
+            filter_paths: Optional list of path patterns to filter results
+            min_score: Minimum similarity score (0-1)
+            limit: Maximum number of results to return
+        """
         try:
-            # Use QdrantSearchPlugin by default
-            plugin = QdrantSearchPlugin()
-            await plugin.setup()
-
-            logger.info(f"Searching with query: {query}")
+            console = Console()
+            console.print(f"\n[bold #81A1C1]Searching for:[/] [italic #88C0D0]{query}[/]")
             if filter_paths:
-                logger.info(f"Filtering by paths: {filter_paths}")
-
-            results = await plugin.search(
-                query,
-                filter_paths=filter_paths,
-                min_score=min_score,
-                limit=limit,
-            )
-
-            # Display results
+                console.print(f"[#88C0D0]Filtering by paths:[/] [italic #A3BE8C]{', '.join(filter_paths)}[/]")
+            
+            # Initialize combined search plugin
+            search_plugin = CombinedSearchPlugin(self.qdrant_client)
+            await search_plugin.setup()
+            
+            with Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(complete_style="#88C0D0", finished_style="#A3BE8C"),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+                search_task = progress.add_task("[bold #81A1C1]Searching...", total=1)
+                
+                # Get search results
+                results = await search_plugin.search(
+                    query,
+                    filter_paths=filter_paths,
+                    min_score=min_score,
+                    limit=limit
+                )
+                progress.advance(search_task)
+            
+            # Print results
             if not results:
-                print(f"\nNo results found for query: '{query}'")
+                console.print("\n[bold #BF616A]No matching code found.[/]")
                 return
-
-            print(f"\nFound {len(results)} results for query: '{query}'\n")
+            
+            console.print(f"\n[bold #A3BE8C]Found {len(results)} matches:[/]")
+                
             for i, result in enumerate(results, 1):
-                print(f"[{i}] {result['filepath']} (score: {result['score']:.3f})")
-                print(f"Lines {result['start_line']}-{result['end_line']}")
-                print(result["code"].rstrip())
-                print("\n" + "=" * 80 + "\n")
-
+                # Print separator
+                console.print(f"\n[#616E88]{'─' * 80}[/]")
+                
+                # Print match header with score color based on value
+                score = result['score']
+                if score >= 0.9:
+                    score_color = "#A3BE8C"  # nord14 - green for high scores
+                elif score >= 0.8:
+                    score_color = "#EBCB8B"  # nord13 - yellow for medium scores
+                else:
+                    score_color = "#D08770"  # nord12 - orange for lower scores
+                    
+                console.print(f"[bold #88C0D0]Match {i}[/] (score: [bold {score_color}]{score:.2f}[/])")
+                
+                # Print file info
+                filepath = result['filepath']
+                filename = Path(filepath).name
+                directory = str(Path(filepath).parent)
+                console.print(f"[#88C0D0]File:[/] [bold #81A1C1]{filename}[/] [italic #616E88]in {directory}[/]")
+                console.print(f"[#88C0D0]Lines:[/] [#81A1C1]{result['start_line']}-{result['end_line']}[/]")
+                
+                # Print separator before code
+                console.print(f"[#616E88]{'─' * 80}[/]")
+                
+                # Add syntax highlighting
+                try:
+                    lexer = get_lexer_for_filename(result['filepath'])
+                except Exception:
+                    lexer = TextLexer()
+                    
+                highlighted_code = highlight(
+                    result['code'],
+                    lexer,
+                    Terminal256Formatter(style=NordStyle)
+                )
+                print(highlighted_code, end='')
+                
+            # Clean up
+            await search_plugin.cleanup()
+                
         except Exception as e:
+            console.print(f"[bold #BF616A]Search failed:[/] [italic #BF616A]{e}[/]")
             logger.error(f"Search failed: {e}")
-            raise
-
-        finally:
-            await plugin.cleanup()
+            print("Please try again.")
 
     async def ingest(self, source: CodeSourcePlugin) -> None:
         """Ingest code from a source."""

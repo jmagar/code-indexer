@@ -18,6 +18,10 @@ tqdm>=4.66.0
 aiofiles>=23.2.0
 pydantic>=2.6.0
 pygments>=2.17.0
+rich>=13.7.0
+
+# Code Analysis
+tree-sitter>=0.20.4
 
 # Logging and monitoring
 structlog>=24.1.0

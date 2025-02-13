@@ -1,7 +1,24 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+
+class BasePlugin(ABC):
+    """Base class for all plugins."""
+    
+    def __init__(self):
+        """Initialize base plugin."""
+        self.name = self.__class__.__name__
+        
+    @abstractmethod
+    async def analyze(self, *args, **kwargs) -> Dict[str, Any]:
+        """Analyze input and return results.
+        
+        This is the main entry point for all plugins.
+        Each plugin should implement this method according to its specific needs.
+        """
+        pass
 
 
 class CodeSourcePlugin(ABC):

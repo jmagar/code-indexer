@@ -1,0 +1,123 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "code-indexer"
+version = "1.0.0"
+description = "A powerful tool for indexing and semantically searching codebases using embeddings and vector search"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [
+    { name = "jmagar", email = "jmagar@example.com" }
+]
+keywords = ["code-search", "embeddings", "semantic-search", "vector-search", "qdrant"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "openai>=1.12.0",
+    "qdrant-client>=1.7.0",
+    "PyGithub>=2.1.1",
+    "GitPython>=3.1.40",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "aiohttp>=3.9.0",
+    "numpy>=1.26.0",
+    "tqdm>=4.66.0",
+    "aiofiles>=23.2.0",
+    "pydantic>=2.6.0",
+    "pygments>=2.17.0",
+    "rich>=13.7.0",
+    "tree-sitter>=0.20.4",
+    "structlog>=24.1.0",
+    "prometheus-client>=0.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=24.2.0",
+    "isort>=5.13.0",
+    "mypy>=1.8.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jmagar/code-indexer"
+Documentation = "https://github.com/jmagar/code-indexer#readme"
+Repository = "https://github.com/jmagar/code-indexer.git"
+Issues = "https://github.com/jmagar/code-indexer/issues"
+
+[project.scripts]
+index = "processor:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["plugins", "processor.py"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "plugins/**/*.py",
+    "processor.py",
+    "README.md",
+    "LICENSE",
+]
+exclude = [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.mypy_cache",
+]
+
+[tool.uv]
+no-cache = false
+cache-dir = ".uv"
+index-url = "https://pypi.org/simple"
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+line_length = 88
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = [
+    "tree_sitter.*",
+    "qdrant_client.*",
+    "openai.*",
+    "github.*",
+    "gitpython.*",
+]
+ignore_missing_imports = true 
