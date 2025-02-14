@@ -47,7 +47,7 @@ logs/
 *.db
 qdrant_storage/
 
-# Testing
+# Testing and Cache
 .pytest_cache/
 .coverage
 htmlcov/
@@ -56,6 +56,10 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+.mypy_cache/
+.ruff_cache/
+.uv/
+*cache*/
 
 # Distribution / packaging
 .Python

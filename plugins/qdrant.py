@@ -24,9 +24,10 @@ class QdrantSearchPlugin(CodeSearchPlugin):
     def __init__(
         self,
         collection_name: str = "code_reference",
-        qdrant_url: str = "http://localhost:6335",
+        qdrant_url: str = "http://localhost:6550",
         qdrant_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
+        qdrant_client: Optional[QdrantClient] = None,
     ):
         """Initialize the plugin.
 
@@ -35,12 +36,13 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             qdrant_url: URL of the Qdrant server
             qdrant_api_key: Optional API key for Qdrant
             openai_api_key: Optional API key for OpenAI
+            qdrant_client: Optional existing Qdrant client
         """
         self.collection_name = collection_name
         self.qdrant_url = qdrant_url
         self.qdrant_api_key = qdrant_api_key or os.getenv("QDRANT_API_KEY")
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
-        self.qdrant_client = None
+        self.qdrant_client = qdrant_client
         self.openai_client = None
 
     @property
@@ -60,12 +62,14 @@ class QdrantSearchPlugin(CodeSearchPlugin):
         if not self.openai_api_key:
             raise ValueError("OpenAI API key not provided")
 
-        # Initialize clients
-        self.qdrant_client = QdrantClient(
-            url=self.qdrant_url,
-            api_key=self.qdrant_api_key,
-            timeout=30,
-        )
+        # Initialize clients if not provided
+        if not self.qdrant_client:
+            self.qdrant_client = QdrantClient(
+                url=self.qdrant_url,
+                api_key=self.qdrant_api_key,
+                timeout=30,
+                verify=False  # Suppress SSL warnings for local connections
+            )
         self.openai_client = AsyncOpenAI(api_key=self.openai_api_key)
 
         # Verify collection exists
@@ -93,7 +97,7 @@ class QdrantSearchPlugin(CodeSearchPlugin):
         # Get query embedding
         response = await self.openai_client.embeddings.create(
             model="text-embedding-ada-002",
-            input=query,
+            input=query.lower(),  # Convert query to lowercase for consistency
         )
         query_vector = response.data[0].embedding
 
@@ -102,22 +106,47 @@ class QdrantSearchPlugin(CodeSearchPlugin):
         if filter_paths:
             path_conditions = []
             for path in filter_paths:
+                # Convert path to lowercase for case-insensitive matching
+                path_lower = path.lower()
                 # Search in filepath and repository name if available
                 path_conditions.extend(
                     [
                         models.FieldCondition(
-                            key="metadata.filepath", match=models.MatchText(text=path)
+                            key="metadata.filepath", 
+                            match=models.MatchText(text=path_lower)
                         ),
                         models.FieldCondition(
-                            key="metadata.repo.name", match=models.MatchText(text=path)
+                            key="metadata.repo.name", 
+                            match=models.MatchText(text=path_lower)
                         )
-                        if "repo" in path
+                        if "repo" in path_lower
                         else None,
                     ]
                 )
             path_conditions = [c for c in path_conditions if c is not None]
             if path_conditions:
                 search_filter = models.Filter(should=path_conditions)
+
+        # For TODO searches, prioritize chunks with has_todo flag
+        if "todo" in query.lower():
+            todo_filter = models.Filter(
+                should=[
+                    models.FieldCondition(
+                        key="metadata.has_todo",
+                        match=models.MatchValue(value=True)
+                    ),
+                    models.FieldCondition(
+                        key="metadata.is_comment",
+                        match=models.MatchValue(value=True)
+                    )
+                ]
+            )
+            if search_filter:
+                search_filter = models.Filter(
+                    must=[search_filter, todo_filter]
+                )
+            else:
+                search_filter = todo_filter
 
         # Search in Qdrant
         response = self.qdrant_client.search(
@@ -156,6 +185,7 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 "end_line": metadata.get("end_line", 0),
                 "source": metadata.get("source", "unknown"),
                 "file_type": metadata.get("file_type", "unknown"),
+                "metadata": metadata,  # Include full metadata for display
             }
 
             # Add repository info if available

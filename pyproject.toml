@@ -7,7 +7,7 @@ name = "code-indexer"
 version = "1.0.0"
 description = "A powerful tool for indexing and semantically searching codebases using embeddings and vector search"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 license = "MIT"
 authors = [
     { name = "jmagar", email = "jmagar@example.com" }
@@ -18,10 +18,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
@@ -52,6 +49,8 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
+    "types-pygments>=2.19.0",
+    "types-setuptools>=75.8.0",
 ]
 
 [project.urls]
@@ -86,7 +85,7 @@ index-url = "https://pypi.org/simple"
 
 [tool.black]
 line-length = 88
-target-version = ["py38"]
+target-version = ["py312"]
 include = '\.pyi?$'
 
 [tool.isort]
@@ -99,7 +98,7 @@ ensure_newline_before_comments = true
 line_length = 88
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

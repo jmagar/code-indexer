@@ -9,6 +9,8 @@ from typing import Dict, List, Optional
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.console import Console
 from rich import print as rprint
+from datetime import datetime, timezone
+import re
 
 # Add the current directory to Python path
 script_dir = Path(__file__).parent
@@ -25,18 +27,24 @@ from plugins import (
 from plugins.embeddings import LMStudioEmbedding, OpenAIEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from plugins.analysis.syntax_search import TreeSitterSearch
-from plugins.search.combined_search import CombinedSearchPlugin
+from plugins.search.search import TreeSitterSearch, CombinedSearchPlugin
 from pygments import highlight
 from pygments.formatters import Terminal256Formatter
 from pygments.lexers import get_lexer_for_filename, TextLexer
 from plugins.colors import NordStyle
+from plugins.sources import SourceManager
+from plugins.analysis.code_explainer import OpenAICodeExplainer
 
 # Load environment variables
 load_dotenv()
 
 # Configure logging
 logger = IndexerLogger(__name__).get_logger()
+logger.setLevel("WARNING")  # Only show warning and above by default
+
+# Suppress urllib3 warnings about insecure requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration
 COLLECTION_NAME = "code_reference"
@@ -55,9 +63,10 @@ class CodeProcessor:
         """
         # Initialize clients
         self.qdrant_client = QdrantClient(
-            url="http://localhost:6335",
+            url="http://localhost:6550",
             api_key=os.getenv("QDRANT_API_KEY"),
             timeout=30,
+            verify=False  # Suppress SSL warnings for local connections
         )
 
         # Set up embedding provider with fallback
@@ -134,8 +143,12 @@ class CodeProcessor:
             logger.error(f"Error getting existing file hashes: {e}")
             return {}
 
-    async def setup_collection(self):
-        """Setup or reset Qdrant collection."""
+    async def setup_collection(self, force: bool = False):
+        """Setup or reset Qdrant collection.
+        
+        Args:
+            force: If True, recreate the collection even if it exists
+        """
         try:
             logger.info("Setting up Qdrant collection")
             # Check if collection exists
@@ -144,6 +157,11 @@ class CodeProcessor:
                 collection.name == COLLECTION_NAME
                 for collection in collections.collections
             )
+
+            if exists and force:
+                logger.info(f"Recreating collection {COLLECTION_NAME}")
+                self.qdrant_client.delete_collection(collection_name=COLLECTION_NAME)
+                exists = False
 
             if not exists:
                 # Create collection with correct vector size for embeddings
@@ -173,6 +191,16 @@ class CodeProcessor:
                     field_name="metadata.file_type",
                     field_schema=models.PayloadSchemaType.KEYWORD,
                 )
+                self.qdrant_client.create_payload_index(
+                    collection_name=COLLECTION_NAME,
+                    field_name="metadata.has_todo",
+                    field_schema=models.PayloadSchemaType.BOOL,
+                )
+                self.qdrant_client.create_payload_index(
+                    collection_name=COLLECTION_NAME,
+                    field_name="metadata.is_comment",
+                    field_schema=models.PayloadSchemaType.BOOL,
+                )
                 logger.info("Successfully set up Qdrant collection")
             else:
                 logger.info(f"Collection {COLLECTION_NAME} already exists")
@@ -192,15 +220,72 @@ class CodeProcessor:
         current_size = 0
         start_line = 0
 
+        # Determine origin based on source type
+        origin = ""
+        if source == "local":
+            # Use the root directory as origin for local files
+            origin = str(Path(filepath).resolve().parent)
+
         # Estimate tokens (rough approximation: 4 chars per token)
         MAX_TOKENS = 2048  # 25% of OpenAI's 8192 limit for safety
         CHARS_PER_TOKEN = 4
         MAX_CHARS = MAX_TOKENS * CHARS_PER_TOKEN
 
+        # Track if we're in a comment block
+        in_comment_block = False
+        comment_chunk = []
+        comment_start = 0
+
         for i, line in enumerate(lines):
             line = line.rstrip()  # Remove trailing whitespace
             if not line:  # Skip empty lines
                 continue
+
+            # Check for comment blocks and TODOs
+            is_comment = bool(re.match(r'^\s*#|^\s*//|^\s*/\*|\*/', line))
+            has_todo = 'todo' in line.lower()
+
+            # If it's a comment or TODO, add to comment chunk
+            if is_comment or has_todo:
+                if not comment_chunk:
+                    comment_start = i
+                comment_chunk.append(line)
+                if has_todo:  # Force create a chunk for TODOs
+                    chunk_text = "\n".join(comment_chunk)
+                    chunk = {
+                        "text": chunk_text,
+                        "metadata": {
+                            "filepath": filepath,
+                            "start_line": comment_start,
+                            "end_line": i + 1,
+                            "source": source,
+                            "origin": origin,
+                            "file_type": Path(filepath).suffix[1:],
+                            "is_comment": True,
+                            "has_todo": has_todo
+                        },
+                    }
+                    chunks.append(chunk)
+                    comment_chunk = []
+                continue
+
+            # If we were collecting comments and now hit code, create a comment chunk
+            if comment_chunk:
+                chunk_text = "\n".join(comment_chunk)
+                chunk = {
+                    "text": chunk_text,
+                    "metadata": {
+                        "filepath": filepath,
+                        "start_line": comment_start,
+                        "end_line": i,
+                        "source": source,
+                        "origin": origin,
+                        "file_type": Path(filepath).suffix[1:],
+                        "is_comment": True
+                    },
+                }
+                chunks.append(chunk)
+                comment_chunk = []
 
             # Check if adding this line would exceed the token limit
             potential_chunk = "\n".join(current_chunk + [line])
@@ -212,9 +297,10 @@ class CodeProcessor:
                         "metadata": {
                             "filepath": filepath,
                             "start_line": start_line,
-                            "end_line": i,  # Current line number
+                            "end_line": i,
                             "source": source,
-                            "file_type": Path(filepath).suffix[1:],  # Remove the dot
+                            "origin": origin,
+                            "file_type": Path(filepath).suffix[1:],
                         },
                     }
                     chunks.append(chunk)
@@ -234,6 +320,7 @@ class CodeProcessor:
                                 "start_line": i,
                                 "end_line": i + 1,
                                 "source": source,
+                                "origin": origin,
                                 "file_type": Path(filepath).suffix[1:],
                             },
                         }
@@ -246,6 +333,23 @@ class CodeProcessor:
                 current_chunk.append(line)
                 current_size += len(line.split())
 
+        # Add any remaining comments
+        if comment_chunk:
+            chunk_text = "\n".join(comment_chunk)
+            chunk = {
+                "text": chunk_text,
+                "metadata": {
+                    "filepath": filepath,
+                    "start_line": comment_start,
+                    "end_line": len(lines),
+                    "source": source,
+                    "origin": origin,
+                    "file_type": Path(filepath).suffix[1:],
+                    "is_comment": True
+                },
+            }
+            chunks.append(chunk)
+
         # Add the remaining lines as the last chunk
         if current_chunk:
             chunk_text = "\n".join(current_chunk)
@@ -256,6 +360,7 @@ class CodeProcessor:
                     "start_line": start_line,
                     "end_line": len(lines),
                     "source": source,
+                    "origin": origin,
                     "file_type": Path(filepath).suffix[1:],
                 },
             }
@@ -505,41 +610,24 @@ class CodeProcessor:
         min_score: float = 0.7,
         limit: int = 5,
     ) -> None:
-        """Search for code using combined semantic and syntax-aware search.
-        
-        Args:
-            query: Search query
-            filter_paths: Optional list of path patterns to filter results
-            min_score: Minimum similarity score (0-1)
-            limit: Maximum number of results to return
-        """
+        """Search for code using combined semantic and syntax-aware search."""
         try:
             console = Console()
             console.print(f"\n[bold #81A1C1]Searching for:[/] [italic #88C0D0]{query}[/]")
             if filter_paths:
                 console.print(f"[#88C0D0]Filtering by paths:[/] [italic #A3BE8C]{', '.join(filter_paths)}[/]")
             
-            # Initialize combined search plugin
+            # Initialize search plugin (reuse existing Qdrant client)
             search_plugin = CombinedSearchPlugin(self.qdrant_client)
             await search_plugin.setup()
             
-            with Progress(
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(complete_style="#88C0D0", finished_style="#A3BE8C"),
-                TaskProgressColumn(),
-                TimeRemainingColumn(),
-                console=console
-            ) as progress:
-                search_task = progress.add_task("[bold #81A1C1]Searching...", total=1)
-                
-                # Get search results
-                results = await search_plugin.search(
-                    query,
-                    filter_paths=filter_paths,
-                    min_score=min_score,
-                    limit=limit
-                )
-                progress.advance(search_task)
+            # Get search results
+            results = await search_plugin.search(
+                query,
+                filter_paths=filter_paths,
+                min_score=min_score,
+                limit=limit
+            )
             
             # Print results
             if not results:
@@ -547,6 +635,11 @@ class CodeProcessor:
                 return
             
             console.print(f"\n[bold #A3BE8C]Found {len(results)} matches:[/]")
+                
+            # Initialize code explainer only if needed (not for TODO searches)
+            code_explainer = None
+            if 'todo' not in query.lower():
+                code_explainer = OpenAICodeExplainer()
                 
             for i, result in enumerate(results, 1):
                 # Print separator
@@ -567,8 +660,18 @@ class CodeProcessor:
                 filepath = result['filepath']
                 filename = Path(filepath).name
                 directory = str(Path(filepath).parent)
+                
+                # Get and display origin source
+                metadata = result.get('metadata', {})
+                if metadata.get('source') == 'github':
+                    repo = metadata.get('repo', {})
+                    if repo:
+                        console.print(f"[#88C0D0]Source:[/] [bold #81A1C1]GitHub[/] ([italic #616E88]https://{repo['url']}[/])")
+                        console.print(f"[#88C0D0]Branch:[/] [italic #616E88]{repo['branch']}[/] [#88C0D0]Commit:[/] [italic #616E88]{repo['commit'][:8]}[/]")
+                elif metadata.get('origin'):
+                    console.print(f"[#88C0D0]Source:[/] [bold #81A1C1]Local[/] ([italic #616E88]{metadata['origin']}[/])")
+                
                 console.print(f"[#88C0D0]File:[/] [bold #81A1C1]{filename}[/] [italic #616E88]in {directory}[/]")
-                console.print(f"[#88C0D0]Lines:[/] [#81A1C1]{result['start_line']}-{result['end_line']}[/]")
                 
                 # Print separator before code
                 console.print(f"[#616E88]{'─' * 80}[/]")
@@ -586,6 +689,32 @@ class CodeProcessor:
                 )
                 print(highlighted_code, end='')
                 
+                # Only generate code explanation for non-TODO searches
+                if code_explainer:
+                    # Generate and print code explanation
+                    console.print(f"\n[#616E88]{'─' * 80}[/]")
+                    console.print("[bold #88C0D0]Code Explanation:[/]")
+                    
+                    # Try to explain as a function first, fall back to snippet explanation
+                    code = result['code']
+                    function_match = re.search(r'\b(?:def|function|fn|func)\s+(\w+)', code)
+                    
+                    if function_match:
+                        # It's a function, use function explanation
+                        function_name = function_match.group(1)
+                        explanation = await code_explainer.explain_function(code, function_name)
+                    else:
+                        # Use general snippet explanation
+                        explanation = await code_explainer.explain_snippet(
+                            code,
+                            context=f"This code was found while searching for: {query}"
+                        )
+                    
+                    # Print explanation with proper formatting
+                    for line in explanation.split('\n'):
+                        if line.strip():
+                            console.print(f"[#D8DEE9]{line}[/]")
+            
             # Clean up
             await search_plugin.cleanup()
                 
@@ -603,21 +732,108 @@ class CodeProcessor:
             raise
 
 
+def print_help(console: Console):
+    """Print formatted help message with available commands."""
+    console.print("\n[bold #88C0D0]Code Indexer[/] - Semantic code search and analysis\n")
+    
+    console.print("[bold #81A1C1]Available Commands:[/]")
+    
+    # Search commands
+    console.print("\n[bold #8FBCBB]Search[/]")
+    console.print("  [#88C0D0]index search[/] [italic #616E88]<query>[/]     Search code semantically")
+    console.print("  [#D8DEE9]Options:[/]")
+    console.print("    [#616E88]--paths[/] [italic]<paths>[/]     Filter by file paths")
+    console.print("    [#616E88]--min-score[/] [italic]<float>[/] Minimum similarity (default: 0.7)")
+    console.print("    [#616E88]--limit[/] [italic]<int>[/]       Maximum results (default: 5)")
+    
+    # Source management
+    console.print("\n[bold #8FBCBB]Source Management[/]")
+    console.print("  [#88C0D0]index sources list[/]           List all indexed sources")
+    console.print("  [#88C0D0]index sources add[/] [italic #616E88]<type> <path>[/]    Add a source")
+    console.print("    [#D8DEE9]Types:[/]")
+    console.print("      [#616E88]github[/] [italic]<url>[/]        GitHub repository")
+    console.print("      [#616E88]local[/] [italic]<path>[/]        Local directory")
+    console.print("  [#88C0D0]index sources remove[/] [italic #616E88]<id>[/]     Remove a source")
+    console.print("  [#88C0D0]index sources reingest[/] [italic #616E88][id][/]   Reingest source(s)")
+    
+    # Ingestion commands
+    console.print("\n[bold #8FBCBB]Direct Ingestion[/]")
+    console.print("  [#88C0D0]index ingest github[/] [italic #616E88]<url>[/]    Ingest GitHub repository")
+    console.print("  [#88C0D0]index ingest local[/] [italic #616E88]<path>[/]    Ingest local directory")
+    
+    # Watch commands
+    console.print("\n[bold #8FBCBB]Repository Watching[/]")
+    console.print("  [#88C0D0]index watch list[/]              List watched repositories")
+    console.print("  [#88C0D0]index watch add[/] [italic #616E88]<url>[/]        Start watching repository")
+    console.print("  [#88C0D0]index watch remove[/] [italic #616E88]<name>[/]    Stop watching repository")
+    console.print("  [#88C0D0]index watch serve[/]             Start watch server")
+    
+    # Other commands
+    console.print("\n[bold #8FBCBB]Other[/]")
+    console.print("  [#88C0D0]index test[/] [italic #616E88]--embedding <provider>[/]  Test embedding provider")
+    
+    console.print("\n[bold #81A1C1]Examples:[/]")
+    console.print("[#616E88]  # Search for code[/]")
+    console.print("  [#88C0D0]index search[/] [italic #A3BE8C]\"function to handle database connections\"[/]")
+    console.print("")
+    console.print("[#616E88]  # Add and ingest a GitHub repository[/]")
+    console.print("  [#88C0D0]index sources add github[/] [italic #A3BE8C]https://github.com/user/repo[/]")
+    console.print("  [#88C0D0]index sources reingest[/] [italic #A3BE8C]github:user/repo[/]")
+    console.print("")
+    console.print("[#616E88]  # Watch a repository for changes[/]")
+    console.print("  [#88C0D0]index watch add[/] [italic #A3BE8C]https://github.com/user/repo[/]")
+    console.print("  [#88C0D0]index watch serve[/]")
+    console.print("")
+
 def setup_parser() -> argparse.ArgumentParser:
     """Set up command line argument parser."""
     parser = argparse.ArgumentParser(
-        description="Process, index, and search code using vector embeddings"
+        description="Process, index, and search code using vector embeddings",
+        usage="%(prog)s [-h] [--embedding {openai,lmstudio}] <command> [options]"
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    # Test command
-    test_parser = subparsers.add_parser("test", help="Test embedding provider")
-    test_parser.add_argument(
+    
+    # Global options
+    parser.add_argument(
         "--embedding",
         choices=["openai", "lmstudio"],
-        default="lmstudio",
-        help="Embedding provider to test",
+        default="openai",
+        help="Embedding provider to use (default: openai)",
     )
+    
+    subparsers = parser.add_subparsers(dest="command", required=False)
+
+    # Collection management
+    collection_parser = subparsers.add_parser("collection", help="Manage collections")
+    collection_subparsers = collection_parser.add_subparsers(dest="collection_command", required=True)
+    
+    # Recreate collection
+    collection_subparsers.add_parser(
+        "recreate",
+        help="Recreate the collection with updated schema (WARNING: this will delete all indexed data)"
+    )
+
+    # Source management commands
+    sources_parser = subparsers.add_parser("sources", help="Manage code sources")
+    sources_subparsers = sources_parser.add_subparsers(dest="source_command", required=True)
+    
+    # List sources
+    sources_subparsers.add_parser("list", help="List all indexed sources")
+    
+    # Add source
+    add_source = sources_subparsers.add_parser("add", help="Add a new source")
+    add_source.add_argument("type", choices=["github", "local"], help="Source type")
+    add_source.add_argument("path", help="Repository URL or local path")
+    add_source.add_argument("--branch", help="Git branch (for GitHub sources)")
+    add_source.add_argument("--exclude", help="Patterns to exclude (comma-separated)")
+    add_source.add_argument("--include", help="Patterns to include (comma-separated)")
+    
+    # Remove source
+    remove_source = sources_subparsers.add_parser("remove", help="Remove a source")
+    remove_source.add_argument("id", help="Source ID (e.g., github:user/repo)")
+    
+    # Reingest source(s)
+    reingest = sources_subparsers.add_parser("reingest", help="Reingest source(s)")
+    reingest.add_argument("id", nargs="?", help="Source ID (optional, reingest all if omitted)")
 
     # Search command
     search_parser = subparsers.add_parser("search", help="Search indexed code")
@@ -640,16 +856,12 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Maximum number of results, default: 5",
     )
 
-    # Ingest command
-    ingest_parser = subparsers.add_parser(
-        "ingest", help="Ingest code into vector store"
-    )
+    # Direct ingestion command (legacy support)
+    ingest_parser = subparsers.add_parser("ingest", help="Directly ingest code (legacy)")
     ingest_subparsers = ingest_parser.add_subparsers(dest="source", required=True)
 
     # GitHub source
-    github_parser = ingest_subparsers.add_parser(
-        "github", help="Ingest from GitHub repository"
-    )
+    github_parser = ingest_subparsers.add_parser("github", help="Ingest from GitHub repository")
     github_parser.add_argument(
         "url",
         help="URL of the GitHub repository (e.g., https://github.com/user/repo)",
@@ -681,17 +893,13 @@ def setup_parser() -> argparse.ArgumentParser:
     watch_add.add_argument("url", help="URL of the GitHub repository to watch")
 
     # Remove repo from watch
-    watch_remove = watch_subparsers.add_parser(
-        "remove", help="Stop watching a repository"
-    )
+    watch_remove = watch_subparsers.add_parser("remove", help="Stop watching a repository")
     watch_remove.add_argument(
         "repo_name", help="Name of the repository to stop watching (e.g., 'owner/repo')"
     )
 
     # Start watching server
-    watch_serve = watch_subparsers.add_parser(
-        "serve", help="Start the repository watcher server"
-    )
+    watch_serve = watch_subparsers.add_parser("serve", help="Start the repository watcher server")
     watch_serve.add_argument(
         "--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)"
     )
@@ -699,12 +907,13 @@ def setup_parser() -> argparse.ArgumentParser:
         "--port", type=int, default=8000, help="Port to listen on (default: 8000)"
     )
 
-    # Add embedding provider option
-    parser.add_argument(
+    # Test command
+    test_parser = subparsers.add_parser("test", help="Test embedding provider")
+    test_parser.add_argument(
         "--embedding",
         choices=["openai", "lmstudio"],
-        default="openai",
-        help="Embedding provider to use (default: openai)",
+        default="lmstudio",
+        help="Embedding provider to test",
     )
 
     return parser
@@ -730,6 +939,13 @@ async def test_embeddings(processor: CodeProcessor) -> None:
 async def main():
     """Main entry point."""
     parser = setup_parser()
+    
+    # If no arguments, print help
+    if len(sys.argv) == 1:
+        console = Console()
+        print_help(console)
+        return
+        
     args = parser.parse_args()
 
     processor = CodeProcessor(embedding_provider=args.embedding)
@@ -745,10 +961,107 @@ async def main():
                 min_score=args.min_score,
                 limit=args.limit,
             )
+        elif args.command == "sources":
+            source_manager = SourceManager()
+            await source_manager.setup_collection()
+            
+            if args.source_command == "list":
+                console = Console()
+                await source_manager.list_sources(console)
+                
+            elif args.source_command == "add":
+                # Split patterns into lists if provided
+                exclude_patterns = args.exclude.split(",") if args.exclude else None
+                include_patterns = args.include.split(",") if args.include else None
+                
+                source_id = await source_manager.add_source(
+                    args.type,
+                    args.path,
+                    branch=args.branch,
+                    exclude_patterns=exclude_patterns,
+                    include_patterns=include_patterns,
+                )
+                console = Console()
+                console.print(f"[bold #A3BE8C]Added source:[/] [#88C0D0]{source_id}[/]")
+                
+            elif args.source_command == "remove":
+                success = await source_manager.remove_source(args.id)
+                console = Console()
+                if success:
+                    console.print(f"[bold #A3BE8C]Removed source:[/] [#88C0D0]{args.id}[/]")
+                else:
+                    console.print(f"[bold #BF616A]Source not found:[/] [#88C0D0]{args.id}[/]")
+                    
+            elif args.source_command == "reingest":
+                console = Console()
+                if args.id:
+                    # Reingest specific source
+                    source = await source_manager.get_source(args.id)
+                    if not source:
+                        console.print(f"[bold #BF616A]Source not found:[/] [#88C0D0]{args.id}[/]")
+                        return
+                        
+                    console.print(f"[bold #8FBCBB]Reingesting source:[/] [#88C0D0]{args.id}[/]")
+                    if source["type"] == "github":
+                        plugin = GitHubPlugin(source["url"], branch=source.get("branch"))
+                    else:
+                        plugin = LocalCodePlugin([Path(source["path"])])
+                        
+                    await processor.ingest(plugin)
+                    
+                    # Update last ingestion time
+                    await source_manager.update_source(args.id, {
+                        "last_ingested": datetime.now(timezone.utc).isoformat()
+                    })
+                    
+                else:
+                    # Reingest all sources
+                    sources = await source_manager.list_sources()
+                    if not sources:
+                        console.print("[bold #BF616A]No sources found to reingest[/]")
+                        return
+                        
+                    console.print(f"[bold #8FBCBB]Reingesting all sources[/] ([#88C0D0]{len(sources)}[/] total)")
+                    for source in sources:
+                        source_id = source["id"]
+                        console.print(f"\n[bold #81A1C1]Processing:[/] [#88C0D0]{source_id}[/]")
+                        
+                        if source["type"] == "github":
+                            plugin = GitHubPlugin(source["url"], branch=source.get("branch"))
+                        else:
+                            plugin = LocalCodePlugin([Path(source["path"])])
+                            
+                        try:
+                            await processor.ingest(plugin)
+                            # Update last ingestion time
+                            await source_manager.update_source(source_id, {
+                                "last_ingested": datetime.now(timezone.utc).isoformat()
+                            })
+                            console.print(f"[bold #A3BE8C]Successfully reingested:[/] [#88C0D0]{source_id}[/]")
+                        except Exception as e:
+                            console.print(f"[bold #BF616A]Failed to reingest[/] [#88C0D0]{source_id}[/]:")
+                            console.print(f"[italic #BF616A]{str(e)}[/]")
+                            continue
+                    
+                    console.print("\n[bold #A3BE8C]Reingestion complete![/]")
+                
         elif args.command == "ingest":
+            source_manager = SourceManager()
+            await source_manager.setup_collection()
+            
             if args.source == "github":
+                # Add GitHub source before ingesting
+                source_id = await source_manager.add_source("github", args.url)
+                console = Console()
+                console.print(f"[bold #A3BE8C]Added source:[/] [#88C0D0]{source_id}[/]")
+                
                 plugin = GitHubPlugin(args.url)
                 await processor.ingest(plugin)
+                
+                # Update last ingestion time
+                await source_manager.update_source(source_id, {
+                    "last_ingested": datetime.now(timezone.utc).isoformat()
+                })
 
                 # Set up watching if requested
                 if args.watch:
@@ -758,8 +1071,21 @@ async def main():
                     await watcher.watch_repository(args.url)
                     logger.info(f"Now watching repository: {args.url}")
             else:  # local
+                # Add local source before ingesting
+                for path in args.paths:
+                    source_id = await source_manager.add_source("local", str(path))
+                    console = Console()
+                    console.print(f"[bold #A3BE8C]Added source:[/] [#88C0D0]{source_id}[/]")
+                
                 plugin = LocalCodePlugin(args.paths)
                 await processor.ingest(plugin)
+                
+                # Update last ingestion time for all paths
+                for path in args.paths:
+                    source_id = f"local:{os.path.abspath(str(path))}"
+                    await source_manager.update_source(source_id, {
+                        "last_ingested": datetime.now(timezone.utc).isoformat()
+                    })
 
         elif args.command == "watch":
             from plugins.github_watcher import GitHubWatcher

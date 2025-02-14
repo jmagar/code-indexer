@@ -2,7 +2,9 @@
 
 import ast
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
+from functools import lru_cache
 
 from openai import AsyncOpenAI
 
@@ -10,6 +12,36 @@ from . import CodeExplainer
 from ..logger import IndexerLogger
 
 logger = IndexerLogger(__name__).get_logger()
+
+# Cache configuration
+CACHE_TTL = 3600  # 1 hour in seconds
+CACHE_SIZE = 1000  # Maximum number of cached items
+
+class ExplanationCache:
+    """Simple cache with TTL for code explanations."""
+    
+    def __init__(self, ttl: int = CACHE_TTL, max_size: int = CACHE_SIZE):
+        self.ttl = ttl
+        self.max_size = max_size
+        self.cache: Dict[str, Tuple[str, float]] = {}
+        
+    def get(self, key: str) -> Optional[str]:
+        """Get cached explanation if not expired."""
+        if key in self.cache:
+            explanation, timestamp = self.cache[key]
+            if time.time() - timestamp <= self.ttl:
+                return explanation
+            # Remove expired entry
+            del self.cache[key]
+        return None
+        
+    def set(self, key: str, value: str) -> None:
+        """Cache explanation with timestamp."""
+        # Remove oldest entries if cache is full
+        if len(self.cache) >= self.max_size:
+            oldest = min(self.cache.items(), key=lambda x: x[1][1])
+            del self.cache[oldest[0]]
+        self.cache[key] = (value, time.time())
 
 SNIPPET_EXPLANATION_PROMPT = """
 You are a code explanation expert. Explain this code snippet clearly and concisely:
@@ -58,22 +90,29 @@ class OpenAICodeExplainer(CodeExplainer):
         self.client = AsyncOpenAI(api_key=api_key)
         self.model = "gpt-4-0125-preview"  # Using latest GPT-4 for best results
         self.supported_languages = {'python', 'javascript', 'typescript', 'go', 'rust'}
+        self.cache = ExplanationCache()
+        
+    def _get_cache_key(self, code: str, context: Optional[str] = None) -> str:
+        """Generate cache key from code and context."""
+        # Normalize code by removing whitespace
+        normalized_code = re.sub(r'\s+', ' ', code.strip())
+        if context:
+            normalized_context = re.sub(r'\s+', ' ', context.strip())
+            return f"{normalized_code}::{normalized_context}"
+        return normalized_code
         
     async def explain_snippet(self, code: str, context: Optional[str] = None) -> str:
-        """Generate natural language explanation of code snippet.
-        
-        Args:
-            code: Code snippet to explain
-            context: Optional context about the code
-            
-        Returns:
-            Natural language explanation
-        """
+        """Generate natural language explanation of code snippet with caching."""
         try:
-            # Detect language (simplified)
-            language = self._detect_language(code)
+            # Check cache first
+            cache_key = self._get_cache_key(code, context)
+            cached = self.cache.get(cache_key)
+            if cached:
+                logger.info("Using cached explanation")
+                return cached
             
-            # Generate explanation
+            # Generate new explanation
+            language = self._detect_language(code)
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -91,32 +130,32 @@ class OpenAICodeExplainer(CodeExplainer):
                 max_tokens=500
             )
             
-            return response.choices[0].message.content
+            explanation = response.choices[0].message.content
+            # Cache the result
+            self.cache.set(cache_key, explanation)
+            return explanation
             
         except Exception as e:
             logger.error(f"Code explanation failed: {e}")
             return "Could not generate code explanation."
             
     async def explain_function(self, code: str, function_name: str) -> str:
-        """Generate explanation of specific function.
-        
-        Args:
-            code: Full code containing the function
-            function_name: Name of function to explain
-            
-        Returns:
-            Natural language explanation
-        """
+        """Generate explanation of specific function with caching."""
         try:
             # Extract function code
             function_code = self._extract_function(code, function_name)
             if not function_code:
                 return f"Could not find function '{function_name}' in the code."
                 
-            # Detect language
+            # Check cache first
+            cache_key = self._get_cache_key(function_code, function_name)
+            cached = self.cache.get(cache_key)
+            if cached:
+                logger.info("Using cached function explanation")
+                return cached
+                
+            # Generate new explanation
             language = self._detect_language(code)
-            
-            # Generate explanation
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -134,7 +173,10 @@ class OpenAICodeExplainer(CodeExplainer):
                 max_tokens=500
             )
             
-            return response.choices[0].message.content
+            explanation = response.choices[0].message.content
+            # Cache the result
+            self.cache.set(cache_key, explanation)
+            return explanation
             
         except Exception as e:
             logger.error(f"Function explanation failed: {e}")

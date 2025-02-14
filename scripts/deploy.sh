@@ -37,18 +37,25 @@ QDRANT_HOST="localhost"
 QDRANT_PORT="6550"
 QDRANT_URL="http://${QDRANT_HOST}:${QDRANT_PORT}"
 
+# Set Crawl4AI host and port
+CRAWL4AI_HOST="localhost"
+CRAWL4AI_PORT="6552"
+CRAWL4AI_URL="http://${CRAWL4AI_HOST}:${CRAWL4AI_PORT}"
+
 # Create .env if it doesn't exist
 if [ ! -f .env ]; then
     print_step "Generating new .env file..."
     
-    # Generate Qdrant API key
+    # Generate API keys
     QDRANT_KEY=$(generate_api_key)
+    CRAWL4AI_KEY=$(generate_api_key)
     
     # Create .env with generated keys
     cat > .env <<EOL
 # Required API Keys
 OPENAI_API_KEY=your_openai_api_key_here  # Required for embeddings
 QDRANT_API_KEY=${QDRANT_KEY}             # Auto-generated
+CRAWL4AI_API_KEY=${CRAWL4AI_KEY}         # Auto-generated
 
 # Optional: GitHub Integration
 GITHUB_TOKEN=your_github_token_here      # Optional: For GitHub repository access
@@ -58,6 +65,11 @@ GITHUB_WEBHOOK_SECRET=your_secret_here   # Optional: For GitHub webhooks
 QDRANT_HOST=${QDRANT_HOST}
 QDRANT_PORT=${QDRANT_PORT}
 QDRANT_URL=${QDRANT_URL}
+
+# Crawl4AI Configuration
+CRAWL4AI_HOST=${CRAWL4AI_HOST}
+CRAWL4AI_PORT=${CRAWL4AI_PORT}
+CRAWL4AI_URL=${CRAWL4AI_URL}
 
 # Optional: Processing Configuration
 CHUNK_SIZE=750
@@ -70,7 +82,7 @@ LOG_LEVEL=INFO
 LOG_FORMAT=json
 EOL
 
-    print_step "Created new .env file with secure Qdrant API key"
+    print_step "Created new .env file with secure API keys"
     print_warning "You MUST set your OpenAI API key in .env before using the indexer"
     echo -e "   Get your key at: ${GREEN}https://platform.openai.com/api-keys${NC}"
     
@@ -80,13 +92,13 @@ else
     print_step "Using existing .env file"
 fi
 
-# Source the .env file to get the API key
+# Source the .env file to get the API keys
 # shellcheck source=/dev/null
 source .env
 
-# Start Qdrant
-print_step "Starting Qdrant..."
-docker compose up -d qdrant
+# Start services
+print_step "Starting services..."
+docker compose up -d
 
 # Wait for Qdrant to be ready
 print_step "Waiting for Qdrant to start..."
@@ -103,23 +115,46 @@ while ! curl -s -f -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections" >
 done
 echo ""
 
+# Wait for Crawl4AI to be ready
+print_step "Waiting for Crawl4AI to start..."
+attempt=1
+while ! curl -s -f -H "Authorization: Bearer ${CRAWL4AI_API_KEY}" "${CRAWL4AI_URL}/health" > /dev/null; do
+    if [ $attempt -eq $max_attempts ]; then
+        print_error "Crawl4AI failed to start after ${max_attempts} attempts"
+        exit 1
+    fi
+    echo -n "."
+    sleep 1
+    ((attempt++))
+done
+echo ""
+
 # Get container info
-CONTAINER_ID=$(docker ps -qf "name=index-db")
-if [ -z "$CONTAINER_ID" ]; then
-    print_error "Could not find Qdrant container"
+QDRANT_CONTAINER_ID=$(docker ps -qf "name=index-db")
+CRAWL4AI_CONTAINER_ID=$(docker ps -qf "name=index-crawler")
+
+if [ -z "$QDRANT_CONTAINER_ID" ] || [ -z "$CRAWL4AI_CONTAINER_ID" ]; then
+    print_error "Could not find required containers"
     exit 1
 fi
 
-# Get container IP
-CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CONTAINER_ID")
+# Get container IPs
+QDRANT_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$QDRANT_CONTAINER_ID")
+CRAWL4AI_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CRAWL4AI_CONTAINER_ID")
 
-# Get Qdrant info and stats
-print_step "Qdrant is running! 🚀"
-echo -e "${GREEN}Access Details:${NC}"
+# Print service info
+print_step "Services are running! 🚀"
+echo -e "${GREEN}Qdrant Access Details:${NC}"
 echo -e "Local URL: ${QDRANT_URL}"
-echo -e "Container IP: ${CONTAINER_IP}"
+echo -e "Container IP: ${QDRANT_IP}"
 echo -e "Container Name: index-db"
 echo -e "API Key: ${QDRANT_API_KEY}"
+
+echo -e "\n${GREEN}Crawl4AI Access Details:${NC}"
+echo -e "Local URL: ${CRAWL4AI_URL}"
+echo -e "Container IP: ${CRAWL4AI_IP}"
+echo -e "Container Name: index-crawler"
+echo -e "API Key: ${CRAWL4AI_API_KEY}"
 
 print_step "Checking Qdrant collections..."
 COLLECTIONS=$(curl -s -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections")
@@ -166,7 +201,7 @@ else
 fi
 
 # Check disk usage
-STORAGE_SIZE=$(docker exec "$CONTAINER_ID" du -sh /qdrant/storage 2>/dev/null | cut -f1)
+STORAGE_SIZE=$(docker exec "$QDRANT_CONTAINER_ID" du -sh /qdrant/storage 2>/dev/null | cut -f1)
 echo -e "\nStorage usage: ${STORAGE_SIZE}"
 
 print_step "Configuration Status:"

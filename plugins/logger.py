@@ -159,74 +159,34 @@ class ColoredFormatter(logging.Formatter):
 
 
 class IndexerLogger:
-    """Logger for code indexing and search operations."""
+    """Logger class for the indexer."""
 
-    def __init__(
-        self,
-        name: str,
-        log_dir: Optional[Path] = None,
-        log_level: int = logging.INFO,
-        log_format: str = "%(asctime)s %(name)s %(levelname)s %(message)s",
-        date_format: str = "%Y-%m-%d %H:%M:%S",
-    ):
-        """Initialize indexer logger.
+    def __init__(self, name: str) -> None:
+        """Initialize logger.
 
         Args:
             name: Logger name (usually __name__)
-            log_dir: Directory for log files (default: scripts/indexer/logs)
-            log_level: Logging level (default: INFO)
-            log_format: Log message format
-            date_format: Date format for timestamps
         """
         self.name = name
-        self.log_dir = log_dir or Path(__file__).parent.parent / "logs"
-        self.log_level = log_level
-        self.log_format = log_format
-        self.date_format = date_format
-        self.logger = None
-
-    def _setup(self) -> logging.Logger:
-        """Internal method to set up and configure a logger."""
-        # Create log directory if it doesn't exist
-        self.log_dir.mkdir(exist_ok=True)
-        log_file = self.log_dir / f"{self.name.split('.')[-1]}.log"
-
-        # Create logger
-        logger = logging.getLogger(self.name)
-        logger.setLevel(self.log_level)
-
-        # Remove any existing handlers
-        logger.handlers.clear()
-
-        # Create handlers
-        console_handler = logging.StreamHandler()
-        file_handler = logging.FileHandler(log_file)
-
-        # Set level for handlers
-        console_handler.setLevel(self.log_level)
-        file_handler.setLevel(self.log_level)
-
-        # Create formatters
-        console_formatter = ColoredFormatter(
-            fmt=self.log_format, datefmt=self.date_format
-        )
-        file_formatter = logging.Formatter(
-            fmt=self.log_format, datefmt=self.date_format
-        )
-
-        # Set formatters
-        console_handler.setFormatter(console_formatter)
-        file_handler.setFormatter(file_formatter)
-
-        # Add handlers
-        logger.addHandler(console_handler)
-        logger.addHandler(file_handler)
-
-        self.logger = logger
-        return logger
+        self._logger: Optional[logging.Logger] = None
 
     def get_logger(self) -> logging.Logger:
-        """Get a configured logger. Creates one if it doesn't exist."""
-        if self.logger is None:
-            return self._setup()
-        return self.logger
+        """Get or create logger instance.
+
+        Returns:
+            Configured logger instance
+        """
+        if self._logger is None:
+            self._logger = logging.getLogger(self.name)
+            self._logger.setLevel(logging.INFO)
+
+            # Add console handler if none exists
+            if not self._logger.handlers:
+                handler = logging.StreamHandler()
+                formatter = logging.Formatter(
+                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                )
+                handler.setFormatter(formatter)
+                self._logger.addHandler(handler)
+
+        return self._logger

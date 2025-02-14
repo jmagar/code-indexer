@@ -1,22 +1,55 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional
 
 
 class BasePlugin(ABC):
     """Base class for all plugins."""
-    
-    def __init__(self):
+
+    def __init__(self) -> None:
         """Initialize base plugin."""
-        self.name = self.__class__.__name__
-        
+        self.name: str = self.__class__.__name__
+        self.config: Dict[str, Any] = {}
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        """Configure the plugin with the provided settings.
+
+        Args:
+            config: Configuration dictionary
+        """
+        self.config = config
+
+    def get_config(self, key: str, default: Any = None) -> Any:
+        """Get configuration value.
+
+        Args:
+            key: Configuration key
+            default: Default value if key not found
+
+        Returns:
+            Configuration value
+        """
+        return self.config.get(key, default)
+
+    def validate_config(self) -> bool:
+        """Validate plugin configuration.
+
+        Returns:
+            True if configuration is valid
+        """
+        return True
+
     @abstractmethod
-    async def analyze(self, *args, **kwargs) -> Dict[str, Any]:
-        """Analyze input and return results.
-        
-        This is the main entry point for all plugins.
-        Each plugin should implement this method according to its specific needs.
+    async def process(self, data: Any, **kwargs: Any) -> Any:
+        """Process data using the plugin.
+
+        Args:
+            data: Input data to process
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            Processed data
         """
         pass
 
@@ -60,12 +93,53 @@ class CodeSourcePlugin(ABC):
     def ignore_patterns(self) -> List[str]:
         """Patterns to ignore when processing files."""
         return [
+            # Virtual environments
             "**/venv/**",
+            "**/.venv/**",
+            "**/env/**",
+            "**/ENV/**",
+            # Version control
             "**/.git/**",
+            "**/.svn/**",
+            "**/.hg/**",
+            # Cache directories
             "**/__pycache__/**",
-            "**/node_modules/**",
+            "**/.mypy_cache/**",
+            "**/.pytest_cache/**",
+            "**/.ruff_cache/**",
+            "**/.uv/**",
+            "**/.cache/**",
+            "**/*.pyc",
+            "**/*.pyo",
+            "**/*.pyd",
+            # Build and distribution
             "**/build/**",
             "**/dist/**",
+            "**/*.egg-info/**",
+            # Dependencies
+            "**/node_modules/**",
+            "**/bower_components/**",
+            "**/vendor/**",
+            "**/target/**",  # Rust/Cargo
+            "**/bin/**",
+            "**/obj/**",
+            # IDE
+            "**/.idea/**",
+            "**/.vscode/**",
+            "**/.vs/**",
+            "**/*.sublime-*",
+            # Logs and databases
+            "**/logs/**",
+            "**/*.log",
+            "**/*.sqlite",
+            "**/*.db",
+            # Project specific
+            "**/temp/**",
+            "**/tmp/**",
+            "**/embeddings/**",
+            "**/vectors/**",
+            "**/.qdrant/**",
+            "**/qdrant_storage/**",
         ]
 
 
