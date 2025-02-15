@@ -86,6 +86,9 @@ class QdrantSearchPlugin(CodeSearchPlugin):
 
         # Verify collection exists
         collections = self.qdrant_client.get_collections()
+        logger.info(
+            f"Found collections: {[col.name for col in collections.collections]}"
+        )
         if not any(
             collection.name == self.collection_name
             for collection in collections.collections
@@ -93,6 +96,11 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             raise ValueError(
                 f"Collection {self.collection_name} does not exist. Please index some code first."
             )
+        logger.info(f"Using collection: {self.collection_name}")
+
+        # Get collection info
+        collection_info = self.qdrant_client.get_collection(self.collection_name)
+        logger.info(f"Collection size: {collection_info.points_count} points")
 
     async def search(
         self,
@@ -156,6 +164,7 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 search_filter = todo_filter
 
         # Search in Qdrant
+        logger.info(f"Searching with min_score={min_score}")
         search_results = self.qdrant_client.search(
             collection_name=self.collection_name,
             query_vector=query_vector,
@@ -165,12 +174,14 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             with_payload=True,
             with_vectors=False,
         )
+        logger.info(f"Found {len(search_results)} initial matches")
 
         # Format results
         results = []
         for point in search_results:
             # Skip if payload is missing
             if not point.payload:
+                logger.debug("Skipping result with no payload")
                 continue
 
             # Skip if code is too short or empty
@@ -247,6 +258,7 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             if len(results) >= limit:
                 break
 
+        logger.info(f"Returning {len(results)} final matches")
         return results
 
     async def cleanup(self) -> None:
