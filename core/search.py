@@ -160,7 +160,7 @@ class SearchManager:
                     for i, line in enumerate(lines, start=start_line):
                         # Add line numbers with proper padding
                         line_num = f"{i:4d}"
-                        if i == start_line and i == end_line:
+                        if len(lines) == 1:
                             numbered_lines.append(f"{line_num} ─ {line}")
                         elif i == start_line:
                             numbered_lines.append(f"{line_num} ┌ {line}")
@@ -191,11 +191,11 @@ class SearchManager:
                     )
                     print(highlighted_code, end="")
 
-                    # Show line range
-                    print_info(
-                        console,
-                        f"Lines {start_line}-{end_line}",
-                    )
+                    # Show additional info
+                    if metadata.get("is_comment", False):
+                        print_info(console, "Type: Comment")
+                    if metadata.get("has_todo", False):
+                        print_info(console, "Contains TODO")
                 except Exception as e:
                     logger.error(f"Error displaying result: {e}")
                     print(result["code"])

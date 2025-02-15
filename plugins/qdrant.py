@@ -196,6 +196,12 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 logger.debug("Skipping invalid metadata")
                 continue
 
+            # Skip comments unless explicitly searching for them
+            is_comment = metadata.get("is_comment", False)
+            if is_comment and "comment" not in query.lower():
+                logger.debug("Skipping comment (not searching for comments)")
+                continue
+
             # Get the full context
             start_line = metadata.get("start_line", 0)
             end_line = metadata.get("end_line", 0)
@@ -220,6 +226,13 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             if not lines:
                 logger.debug("Skipping empty result after cleanup")
                 continue
+
+            # Skip if it's just a single-line comment or heading
+            if len(lines) == 1:
+                line = lines[0].strip()
+                if line.startswith("#") or line.startswith("//"):
+                    logger.debug("Skipping single-line comment or heading")
+                    continue
 
             # Build result with context
             result = {
