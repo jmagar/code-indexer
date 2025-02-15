@@ -187,20 +187,26 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             start_line = metadata.get("start_line", 0)
             end_line = metadata.get("end_line", 0)
 
-            # Add context markers
-            context_lines = []
-            if start_line > 0:
-                context_lines.append("...")
-            context_lines.extend(code.split("\n"))
-            if end_line > start_line:
-                context_lines.append("...")
-            code_with_context = "\n".join(context_lines)
+            # Split code into lines and add context
+            lines = code.split("\n")
+
+            # Remove empty lines at the start and end
+            while lines and not lines[0].strip():
+                lines.pop(0)
+                start_line += 1
+            while lines and not lines[-1].strip():
+                lines.pop()
+                end_line -= 1
+
+            # Ensure we have at least 3 lines of context
+            if len(lines) < 3:
+                continue
 
             # Build result with context
             result = {
                 "score": point.score,
                 "filepath": metadata.get("filepath", "unknown"),
-                "code": code_with_context,
+                "code": "\n".join(lines),
                 "start_line": start_line,
                 "end_line": end_line,
                 "source": metadata.get("source", "unknown"),

@@ -151,9 +151,25 @@ class SearchManager:
                     # Add line numbers and context
                     lines = code.split("\n")
                     numbered_lines = []
+
+                    # Add a header line to show context
+                    if start_line > 0:
+                        numbered_lines.append("     ┄ (previous lines)")
+
+                    # Add the actual code lines with numbers
                     for i, line in enumerate(lines, start=start_line):
-                        # Add line numbers
-                        numbered_lines.append(f"{i:4d} │ {line}")
+                        # Add line numbers with proper padding
+                        line_num = f"{i:4d}"
+                        if i == start_line:
+                            numbered_lines.append(f"{line_num} ┌ {line}")
+                        elif i == end_line:
+                            numbered_lines.append(f"{line_num} └ {line}")
+                        else:
+                            numbered_lines.append(f"{line_num} │ {line}")
+
+                    # Add a footer line to show context
+                    if end_line < 1000000:  # Arbitrary large number
+                        numbered_lines.append("     ┄ (more lines)")
 
                     # Join with newlines and ensure it ends with one
                     code_with_numbers = "\n".join(numbered_lines) + "\n"
