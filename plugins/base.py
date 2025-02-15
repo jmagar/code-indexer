@@ -87,21 +87,43 @@ class CodeSourcePlugin(ABC):
     @property
     def supported_extensions(self) -> List[str]:
         """List of file extensions this plugin can handle."""
-        return [".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java"]
+        return [
+            ".py",
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".go",
+            ".rs",
+            ".java",
+            ".md",
+            ".mdx",
+            ".markdown",
+        ]
 
     @property
     def ignore_patterns(self) -> List[str]:
         """Patterns to ignore when processing files."""
         return [
-            # Virtual environments
+            # Development environments and dependencies
+            "**/node_modules/**",
+            "**/bower_components/**",
+            "**/vendor/**",
+            "**/target/**",  # Rust/Cargo
+            "**/bin/**",
+            "**/obj/**",
             "**/venv/**",
             "**/.venv/**",
             "**/env/**",
-            "**/ENV/**",
+            "**/.env/**",
+            "**/.virtualenv/**",
+            "**/.virtualenvs/**",
+            "**/virtualenv/**",
             # Version control
             "**/.git/**",
             "**/.svn/**",
             "**/.hg/**",
+            "**/.bzr/**",
             # Cache directories
             "**/__pycache__/**",
             "**/.mypy_cache/**",
@@ -116,13 +138,9 @@ class CodeSourcePlugin(ABC):
             "**/build/**",
             "**/dist/**",
             "**/*.egg-info/**",
-            # Dependencies
-            "**/node_modules/**",
-            "**/bower_components/**",
-            "**/vendor/**",
-            "**/target/**",  # Rust/Cargo
-            "**/bin/**",
-            "**/obj/**",
+            "**/*.min.js",
+            "**/*.min.css",
+            "**/*.map",
             # IDE
             "**/.idea/**",
             "**/.vscode/**",

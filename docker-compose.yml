@@ -2,6 +2,7 @@ services:
   qdrant:
     container_name: index-db
     image: qdrant/qdrant:latest
+    platform: linux/amd64
     ports:
       - "6550:6333"  # REST API (host:container)
       - "6551:6334"  # GRPC API (host:container)
@@ -10,24 +11,12 @@ services:
     environment:
       - QDRANT_API_KEY=${QDRANT_API_KEY}
     restart: unless-stopped
-
-  crawl4ai:
-    container_name: index-crawler
-    image: crawl4ai/server:latest
-    ports:
-      - "6552:8000"  # REST API
-    environment:
-      - CRAWL4AI_API_KEY=${CRAWL4AI_API_KEY}
-      - CRAWL4AI_CACHE_DIR=/data/cache
-      - CRAWL4AI_LOG_LEVEL=INFO
-    volumes:
-      - crawl4ai_data:/data
-    restart: unless-stopped
-    depends_on:
-      - qdrant
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 volumes:
   qdrant_storage:
     name: index-db-storage
-  crawl4ai_data:
-    name: index-crawler-data 

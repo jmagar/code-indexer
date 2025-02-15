@@ -60,15 +60,17 @@ Repository = "https://github.com/jmagar/code-indexer.git"
 Issues = "https://github.com/jmagar/code-indexer/issues"
 
 [project.scripts]
-index = "processor:main"
+index = "cli:run_cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["plugins", "processor.py"]
+packages = ["plugins", "cli", "core", "utils"]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "plugins/**/*.py",
-    "processor.py",
+    "cli/**/*.py",
+    "core/**/*.py",
+    "utils/**/*.py",
     "README.md",
     "LICENSE",
 ]
@@ -118,5 +120,6 @@ module = [
     "openai.*",
     "github.*",
     "gitpython.*",
+    "crawl4ai.*",
 ]
 ignore_missing_imports = true 

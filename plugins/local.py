@@ -40,7 +40,25 @@ class LocalCodePlugin(CodeSourcePlugin):
             "**/.nuxt/**",
             # Version control
             "**/.git/**",
-            "**/repos/**",
+            "**/.svn/**",
+            "**/.hg/**",
+            "**/.bzr/**",
+            # Cache directories
+            "**/.mypy_cache/**",
+            "**/.pytest_cache/**",
+            "**/.ruff_cache/**",
+            "**/.uv/**",
+            "**/.cache/**",
+            "**/*.pyc",
+            "**/*.pyo",
+            "**/*.pyd",
+            # Build and distribution
+            "**/*.so",
+            "**/*.egg",
+            "**/*.egg-info/**",
+            "**/*.min.js",
+            "**/*.min.css",
+            "**/*.map",
             # Test files
             "**/test/**",
             "**/tests/**",
@@ -49,21 +67,11 @@ class LocalCodePlugin(CodeSourcePlugin):
             "**/__snapshots__/**",
             "**/*.test.*",
             "**/*.spec.*",
-            # Cache and coverage
-            "**/.pytest_cache/**",
-            "**/coverage/**",
-            "**/.coverage/**",
-            "**/htmlcov/**",
-            # Compiled files
-            "**/*.pyc",
-            "**/*.pyo",
-            "**/*.pyd",
-            "**/*.so",
-            "**/*.egg",
-            "**/*.egg-info/**",
-            "**/*.min.js",
-            "**/*.min.css",
-            "**/*.map",
+            # IDE
+            "**/.idea/**",
+            "**/.vscode/**",
+            "**/.vs/**",
+            "**/*.sublime-*",
             # Data and logs
             "**/logs/**",
             "**/data/**",
@@ -72,6 +80,11 @@ class LocalCodePlugin(CodeSourcePlugin):
             "**/storage/**",
             "**/wal/**",
             "**/snapshots/**",
+            # Project specific
+            "**/embeddings/**",
+            "**/vectors/**",
+            "**/.qdrant/**",
+            "**/qdrant_storage/**",
             # System files
             "**/.DS_Store",
             "**/Thumbs.db",
@@ -127,12 +140,13 @@ class LocalCodePlugin(CodeSourcePlugin):
         if not file.is_file():
             return False
 
-        # Check file extension
-        if file.suffix not in self.supported_extensions:
-            return False
-
         # Convert path to string for pattern matching
         file_str = str(file)
+
+        # Check ignore patterns first
+        for pattern in self.ignore_patterns:
+            if Path(file_str).match(pattern):
+                return False
 
         # Check if any part of the path matches ignore patterns
         path_parts = Path(file_str).parts
@@ -143,9 +157,14 @@ class LocalCodePlugin(CodeSourcePlugin):
             ):
                 return False
 
-        # Also check the full path against patterns
-        for pattern in self.ignore_patterns:
-            if fnmatch.fnmatch(file_str, pattern):
-                return False
+        # If we have specific supported extensions, use those
+        if self._supported_extensions:
+            return file.suffix in self._supported_extensions
 
-        return True
+        # Otherwise, allow any non-binary file
+        try:
+            with open(file, "rb") as f:
+                chunk = f.read(1024)
+                return b"\0" not in chunk  # Simple binary check
+        except Exception:
+            return False

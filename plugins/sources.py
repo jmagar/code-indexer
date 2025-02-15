@@ -3,7 +3,7 @@
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TypedDict, cast
+from typing import Any, Dict, List, Optional, TypedDict, Literal
 from urllib.parse import urlparse
 
 from qdrant_client import QdrantClient
@@ -17,21 +17,73 @@ logger = IndexerLogger(__name__).get_logger()
 
 SOURCES_COLLECTION = "sources"
 
+# Define valid optional field names
+OptionalFieldNames = Literal[
+    "url", "branch", "path", "last_hash", "last_commit", "last_ingested", "last_updated"
+]
 
-class SourceMetadata(TypedDict):
-    """Type definition for source metadata."""
+
+class SourceMetadataRequired(TypedDict, total=True):
+    """Required fields for source metadata."""
 
     source_id: str
+    id: str
     type: str
     added_at: str
     settings: Dict[str, List[str]]
-    url: Optional[str]
-    branch: Optional[str]
-    path: Optional[str]
-    last_hash: Optional[str]
-    last_commit: Optional[str]
-    last_ingested: Optional[str]
-    last_updated: Optional[str]
+
+
+class SourceMetadata(SourceMetadataRequired, total=False):
+    """Type definition for source metadata.
+
+    Inherits required fields from SourceMetadataRequired and adds optional fields.
+    """
+
+    url: str
+    branch: str
+    path: str
+    last_hash: str
+    last_commit: str
+    last_ingested: str
+    last_updated: str
+
+
+def create_source_metadata(payload: Dict[str, Any], source_id: str) -> SourceMetadata:
+    """Create a SourceMetadata object from a payload dictionary."""
+    # Start with required fields
+    metadata: SourceMetadata = {
+        "id": source_id,
+        "source_id": source_id,
+        "type": str(payload.get("type", "")),
+        "added_at": str(payload.get("added_at", "")),
+        "settings": payload.get("settings", {}),
+    }
+
+    # Add optional fields if they exist
+    optional_fields: List[OptionalFieldNames] = [
+        "url",
+        "branch",
+        "path",
+        "last_hash",
+        "last_commit",
+        "last_ingested",
+        "last_updated",
+    ]
+    for field in optional_fields:
+        if field in payload:
+            metadata[field] = str(payload[field])
+
+    return metadata
+
+
+def get_source_field(source: SourceMetadata, field: str, default: str = "") -> str:
+    """Safely get a field from SourceMetadata with a default value."""
+    return str(source.get(field, default))
+
+
+def get_source_type(source: SourceMetadata) -> str:
+    """Get the source type, which is a required field."""
+    return source["type"]
 
 
 PayloadDict = Dict[str, Any]
@@ -259,38 +311,47 @@ class SourceManager:
                     if point.payload is None:
                         continue
 
-                    source = point.payload
-                    source_id = source.get("source_id", "unknown")
-                    source_type = source.get("type", "unknown")
+                    source = create_source_metadata(
+                        point.payload, point.payload.get("source_id", "")
+                    )
+                    if not source["source_id"]:
+                        continue
 
                     # Format location
                     location = (
-                        source.get("url")
-                        if source_type == "github"
-                        else source.get("path", "")
+                        get_source_field(source, "url")
+                        if get_source_type(source) == "github"
+                        else get_source_field(source, "path")
                     )
 
                     # Format last ingestion
-                    last_ingested = source.get("last_ingested", "Never")
-                    if last_ingested and last_ingested != "Never":
-                        last_dt = datetime.fromisoformat(
-                            last_ingested.replace("Z", "+00:00")
-                        )
-                        last_ingested = last_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    last_ingested = get_source_field(source, "last_ingested", "Never")
+                    if last_ingested and last_ingested not in ["Never", "None"]:
+                        try:
+                            last_dt = datetime.fromisoformat(
+                                last_ingested.replace("Z", "+00:00")
+                            )
+                            last_ingested = last_dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            last_ingested = "Never"
 
                     # Determine status
-                    if source_type == "github":
-                        status = f"Branch: {source.get('branch', 'default')}"
-                        if source.get("last_commit"):
-                            status += f"\nCommit: {source['last_commit'][:8]}"
+                    if get_source_type(source) == "github":
+                        status = (
+                            f"Branch: {get_source_field(source, 'branch', 'default')}"
+                        )
+                        last_commit = get_source_field(source, "last_commit")
+                        if last_commit and last_commit != "None":
+                            status += f"\nCommit: {last_commit[:8]}"
                     else:
                         status = "Ready"
-                        if source.get("last_hash"):
+                        last_hash = get_source_field(source, "last_hash")
+                        if last_hash and last_hash != "None":
                             status = "Indexed"
 
                     table.add_row(
-                        str(source_id),
-                        source_type,
+                        source["source_id"],
+                        get_source_type(source),
                         str(location),
                         last_ingested,
                         status,
@@ -304,11 +365,10 @@ class SourceManager:
             for point in points:
                 if point.payload is None:
                     continue
-                payload = cast(PayloadDict, point.payload)
-                source_id = payload.get("source_id")
+                source_id = point.payload.get("source_id")
                 if not isinstance(source_id, str):
                     continue
-                result.append(cast(SourceMetadata, {"id": source_id, **payload}))
+                result.append(create_source_metadata(point.payload, source_id))
             return result
 
         except Exception as e:
@@ -325,7 +385,6 @@ class SourceManager:
             Source data or None if not found
         """
         try:
-            # Find point by source_id in payload
             response = self.qdrant_client.scroll(
                 collection_name=SOURCES_COLLECTION,
                 scroll_filter=models.Filter(
@@ -344,12 +403,12 @@ class SourceManager:
             if not points or points[0].payload is None:
                 return None
 
-            point = points[0]
-            payload = cast(PayloadDict, point.payload)
-            source_id = payload.get("source_id")
-            if not isinstance(source_id, str):
+            payload = points[0].payload
+            source_id_from_payload = payload.get("source_id")
+            if not isinstance(source_id_from_payload, str):
                 return None
-            return cast(SourceMetadata, {"id": source_id, **payload})
+
+            return create_source_metadata(payload, source_id_from_payload)
 
         except Exception as e:
             logger.error(f"Error getting source: {e}")

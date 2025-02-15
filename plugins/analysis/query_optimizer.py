@@ -1,7 +1,7 @@
 """Natural language query optimization for better code search results."""
 
 import json
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from openai import AsyncOpenAI
 
@@ -30,68 +30,67 @@ Respond in JSON format:
 }
 """
 
+
 class OpenAIQueryOptimizer(NLQueryOptimizer):
     """Query optimization using OpenAI's language models."""
-    
+
     def __init__(self, api_key: Optional[str] = None):
         super().__init__()
         self.client = AsyncOpenAI(api_key=api_key)
         self.model = "gpt-4-0125-preview"  # Using latest GPT-4 for best results
-        
+
     async def optimize_query(self, query: str) -> str:
-        """Optimize natural language query for code search.
-        
-        Args:
-            query: Original search query
-            
-        Returns:
-            Optimized query string
-        """
+        """Optimize natural language query for code search."""
         try:
             # Get optimization suggestions
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a code search query optimizer."},
-                    {"role": "user", "content": QUERY_OPTIMIZATION_PROMPT.format(query=query)}
+                    {
+                        "role": "system",
+                        "content": "You are a code search query optimizer.",
+                    },
+                    {
+                        "role": "user",
+                        "content": QUERY_OPTIMIZATION_PROMPT.format(query=query),
+                    },
                 ],
-                temperature=0.3,  # Lower temperature for more focused results
-                max_tokens=200
+                temperature=0.3,
+                max_tokens=200,
             )
-            
+
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty response from OpenAI")
+
             # Parse response
-            result = json.loads(response.choices[0].message.content)
-            
+            result = json.loads(content)
+
             # Log optimization details
             logger.info(
-                "Query optimized",
-                original=query,
-                optimized=result["optimized_query"],
-                added_terms=result["added_terms"],
-                removed_terms=result["removed_terms"]
+                "Query optimized: %s -> %s (added: %s, removed: %s)",
+                query,
+                result["optimized_query"],
+                ", ".join(result["added_terms"]),
+                ", ".join(result["removed_terms"]),
             )
-            
-            return result["optimized_query"]
-            
+
+            return str(result["optimized_query"])
+
         except Exception as e:
-            logger.error(f"Query optimization failed: {e}")
+            logger.error("Query optimization failed: %s", e)
             return query  # Return original query if optimization fails
-            
+
     async def explain_optimization(self, original: str, optimized: str) -> str:
-        """Explain how the query was optimized.
-        
-        Args:
-            original: Original search query
-            optimized: Optimized search query
-            
-        Returns:
-            Natural language explanation of changes
-        """
+        """Explain how the query was optimized."""
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a code search query optimizer."},
+                    {
+                        "role": "system",
+                        "content": "You are a code search query optimizer.",
+                    },
                     {
                         "role": "user",
                         "content": f"""
@@ -104,23 +103,27 @@ class OpenAIQueryOptimizer(NLQueryOptimizer):
                         2. What terms were removed and why
                         3. How the structure was improved
                         4. How this will help find better code matches
-                        """
-                    }
+                        """,
+                    },
                 ],
                 temperature=0.3,
-                max_tokens=200
+                max_tokens=200,
             )
-            
-            return response.choices[0].message.content
-            
+
+            explanation = response.choices[0].message.content
+            if not explanation:
+                raise ValueError("Empty response from OpenAI")
+
+            return explanation
+
         except Exception as e:
-            logger.error(f"Optimization explanation failed: {e}")
+            logger.error("Optimization explanation failed: %s", e)
             return "Could not generate optimization explanation."
-            
-    async def analyze(self, code: str, language: str) -> Dict[str, str]:
+
+    async def analyze(self, code: str, language: str, **kwargs: Any) -> Dict[str, Any]:
         """Implement required analyze method from base class."""
         return {
             "supported_models": [self.model],
-            "optimization_enabled": True,
-            "explanation_enabled": True
-        } 
+            "optimization_enabled": "true",
+            "explanation_enabled": "true",
+        }

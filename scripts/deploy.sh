@@ -37,25 +37,18 @@ QDRANT_HOST="localhost"
 QDRANT_PORT="6550"
 QDRANT_URL="http://${QDRANT_HOST}:${QDRANT_PORT}"
 
-# Set Crawl4AI host and port
-CRAWL4AI_HOST="localhost"
-CRAWL4AI_PORT="6552"
-CRAWL4AI_URL="http://${CRAWL4AI_HOST}:${CRAWL4AI_PORT}"
-
 # Create .env if it doesn't exist
 if [ ! -f .env ]; then
     print_step "Generating new .env file..."
     
     # Generate API keys
     QDRANT_KEY=$(generate_api_key)
-    CRAWL4AI_KEY=$(generate_api_key)
     
     # Create .env with generated keys
     cat > .env <<EOL
 # Required API Keys
 OPENAI_API_KEY=your_openai_api_key_here  # Required for embeddings
 QDRANT_API_KEY=${QDRANT_KEY}             # Auto-generated
-CRAWL4AI_API_KEY=${CRAWL4AI_KEY}         # Auto-generated
 
 # Optional: GitHub Integration
 GITHUB_TOKEN=your_github_token_here      # Optional: For GitHub repository access
@@ -65,11 +58,6 @@ GITHUB_WEBHOOK_SECRET=your_secret_here   # Optional: For GitHub webhooks
 QDRANT_HOST=${QDRANT_HOST}
 QDRANT_PORT=${QDRANT_PORT}
 QDRANT_URL=${QDRANT_URL}
-
-# Crawl4AI Configuration
-CRAWL4AI_HOST=${CRAWL4AI_HOST}
-CRAWL4AI_PORT=${CRAWL4AI_PORT}
-CRAWL4AI_URL=${CRAWL4AI_URL}
 
 # Optional: Processing Configuration
 CHUNK_SIZE=750
@@ -115,32 +103,16 @@ while ! curl -s -f -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections" >
 done
 echo ""
 
-# Wait for Crawl4AI to be ready
-print_step "Waiting for Crawl4AI to start..."
-attempt=1
-while ! curl -s -f -H "Authorization: Bearer ${CRAWL4AI_API_KEY}" "${CRAWL4AI_URL}/health" > /dev/null; do
-    if [ $attempt -eq $max_attempts ]; then
-        print_error "Crawl4AI failed to start after ${max_attempts} attempts"
-        exit 1
-    fi
-    echo -n "."
-    sleep 1
-    ((attempt++))
-done
-echo ""
-
 # Get container info
 QDRANT_CONTAINER_ID=$(docker ps -qf "name=index-db")
-CRAWL4AI_CONTAINER_ID=$(docker ps -qf "name=index-crawler")
 
-if [ -z "$QDRANT_CONTAINER_ID" ] || [ -z "$CRAWL4AI_CONTAINER_ID" ]; then
+if [ -z "$QDRANT_CONTAINER_ID" ]; then
     print_error "Could not find required containers"
     exit 1
 fi
 
 # Get container IPs
 QDRANT_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$QDRANT_CONTAINER_ID")
-CRAWL4AI_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CRAWL4AI_CONTAINER_ID")
 
 # Print service info
 print_step "Services are running! 🚀"
@@ -149,12 +121,6 @@ echo -e "Local URL: ${QDRANT_URL}"
 echo -e "Container IP: ${QDRANT_IP}"
 echo -e "Container Name: index-db"
 echo -e "API Key: ${QDRANT_API_KEY}"
-
-echo -e "\n${GREEN}Crawl4AI Access Details:${NC}"
-echo -e "Local URL: ${CRAWL4AI_URL}"
-echo -e "Container IP: ${CRAWL4AI_IP}"
-echo -e "Container Name: index-crawler"
-echo -e "API Key: ${CRAWL4AI_API_KEY}"
 
 print_step "Checking Qdrant collections..."
 COLLECTIONS=$(curl -s -H "api-key: ${QDRANT_API_KEY}" "${QDRANT_URL}/collections")

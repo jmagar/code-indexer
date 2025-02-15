@@ -1,3 +1,9 @@
 #!/bin/bash
+# Add project root to PYTHONPATH
+export PYTHONPATH="$(dirname "$(dirname "$(realpath "$0")")")${PYTHONPATH:+:${PYTHONPATH}}"
+
+# Activate virtual environment
 source "$(dirname "$(dirname "$(realpath "$0")")")/.venv/bin/activate"
-python "$(dirname "$(realpath "$0")")/index.py" "$@"
+
+# Run the CLI
+python -c "import asyncio, sys; from cli.commands import main; asyncio.run(main())" "$@"

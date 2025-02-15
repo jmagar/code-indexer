@@ -1,210 +1,245 @@
-#!/usr/bin/env python3
+"""GitHub repository watcher plugin."""
+
 import asyncio
-import hmac
-import os
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+import json
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional, TypedDict, cast
 
-import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from aiohttp import web
+from rich.console import Console
+from core.processor import CodeProcessor
+from plugins import GitHubPlugin
 
-try:
-    from github import Github  # type: ignore
-    from github.repository import Repository as GithubRepo  # type: ignore
-except ImportError:
-    raise ImportError(
-        "PyGithub package is required. Please install it with: pip install PyGithub"
-    )
+logger = logging.getLogger(__name__)
 
-from .github import GitHubPlugin
-from .logger import IndexerLogger
 
-# Configure logging
-logger = IndexerLogger(__name__).get_logger()
+class Repository(TypedDict):
+    """Type definition for repository data in webhook payload."""
+
+    full_name: str
+
+
+class WebhookPayload(TypedDict):
+    """Type definition for webhook payload."""
+
+    repository: Repository
+
+
+class RepoData(TypedDict):
+    """Type definition for repository data."""
+
+    name: str
+    url: str
+    default_branch: str
+    last_commit: str
+    last_checked: str
+    last_error: Optional[str]
+    last_error_time: Optional[str]
 
 
 class GitHubWatcher:
-    """Watch GitHub repositories for changes and manage webhooks."""
+    """Watches GitHub repositories for changes."""
 
-    def __init__(
-        self,
-        processor: Any,  # CodeProcessor instance
-        github_token: Optional[str] = None,
-        webhook_secret: Optional[str] = None,
-    ):
+    def __init__(self, processor: CodeProcessor):
         """Initialize GitHub watcher.
 
         Args:
-            processor: CodeProcessor instance for reindexing
-            github_token: GitHub API token (or from GITHUB_TOKEN env var)
-            webhook_secret: Secret for webhook validation (or from GITHUB_WEBHOOK_SECRET env var)
+            processor: Code processor instance
         """
         self.processor = processor
-        self.github_token = github_token or os.getenv("GITHUB_TOKEN")
-        self.webhook_secret = webhook_secret or os.getenv("GITHUB_WEBHOOK_SECRET")
-        if not self.github_token:
-            raise ValueError("GitHub token not provided")
+        self.console = Console()
+        self.data_dir = Path.home() / ".indexer" / "watched_repos"
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_file = self.data_dir / "repos.json"
 
-        self.github = Github(self.github_token)
-        self.app = FastAPI()
-        self.watched_repos: Dict[str, Dict[str, Any]] = {}
-        self._setup_routes()
+    def _load_data(self) -> List[RepoData]:
+        """Load watched repositories data."""
+        if not self.data_file.exists():
+            return []
+        try:
+            with open(self.data_file, "r") as f:
+                data = json.load(f)
+                return cast(List[RepoData], data)
+        except Exception as e:
+            logger.error(f"Error loading watched repos data: {e}")
+            return []
 
-    def _setup_routes(self):
-        """Set up webhook routes."""
+    def _save_data(self, data: List[RepoData]) -> None:
+        """Save watched repositories data."""
+        try:
+            with open(self.data_file, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving watched repos data: {e}")
 
-        @self.app.post("/webhook")
-        async def handle_webhook(request: Request):
-            # Verify webhook signature
-            if self.webhook_secret:
-                signature = request.headers.get("X-Hub-Signature-256")
-                if not signature:
-                    raise HTTPException(status_code=400, detail="No signature provided")
-
-                body = await request.body()
-                expected_signature = f"sha256={hmac.new(self.webhook_secret.encode(), body, 'sha256').hexdigest()}"
-                if not hmac.compare_digest(signature, expected_signature):
-                    raise HTTPException(status_code=400, detail="Invalid signature")
-
-            # Process webhook payload
-            payload = await request.json()
-            event_type = request.headers.get("X-GitHub-Event")
-
-            if event_type == "push":
-                await self._handle_push_event(payload)
-            elif event_type == "repository":
-                await self._handle_repository_event(payload)
-
-            return {"status": "ok"}
-
-    async def _handle_push_event(self, payload: Dict) -> None:
-        """Handle repository push events."""
-        repo_name = payload["repository"]["full_name"]
-        if repo_name in self.watched_repos:
-            logger.info(f"Push detected in repository: {repo_name}")
-            # Trigger reindex for this repository
-            await self._trigger_reindex(repo_name, payload["after"])
-
-    async def _handle_repository_event(self, payload: Dict) -> None:
-        """Handle repository events (created, deleted, etc)."""
-        action = payload.get("action")
-        repo_name = payload["repository"]["full_name"]
-
-        if action == "deleted" and repo_name in self.watched_repos:
-            logger.info(f"Repository deleted: {repo_name}")
-            await self._remove_repository(repo_name)
+    def get_watched_repositories(self) -> List[RepoData]:
+        """Get list of watched repositories."""
+        return self._load_data()
 
     async def watch_repository(self, repo_url: str) -> bool:
-        """Start watching a repository for changes."""
+        """Start watching a repository.
+
+        Args:
+            repo_url: GitHub repository URL
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
         try:
-            # Extract repo name from URL
-            repo_name = repo_url.split("github.com/")[-1].strip("/")
-            repo = self.github.get_repo(repo_name)
+            # Extract owner/repo from URL
+            repo_name = repo_url.split("github.com/")[1].rstrip("/")
 
-            # Store repo info
-            self.watched_repos[repo_name] = {
+            # Check if already watching
+            repos = self._load_data()
+            for repo in repos:
+                if repo["name"] == repo_name:
+                    logger.info(f"Already watching {repo_name}")
+                    return True
+
+            # Get repository info
+            plugin = GitHubPlugin(repo_url)
+            await plugin.prepare()
+
+            # Add to watched repos
+            new_repo: RepoData = {
+                "name": repo_name,
                 "url": repo_url,
-                "last_checked": datetime.utcnow(),
-                "default_branch": repo.default_branch,
-                "last_commit": repo.get_branch(repo.default_branch).commit.sha,
+                "default_branch": "main",  # Default to main
+                "last_commit": "",  # Will be updated on first check
+                "last_checked": datetime.now(timezone.utc).isoformat(),
+                "last_error": None,
+                "last_error_time": None,
             }
+            repos.append(new_repo)
+            self._save_data(repos)
 
-            # Set up webhook if secret is configured
-            if self.webhook_secret:
-                await self._setup_webhook(repo)
-
-            logger.info(f"Now watching repository: {repo_name}")
+            logger.info(f"Started watching {repo_name}")
             return True
 
         except Exception as e:
-            logger.error(f"Error setting up repository watch: {e}")
+            logger.error(f"Error watching repository {repo_url}: {e}")
             return False
 
-    async def _setup_webhook(self, repo: GithubRepo) -> None:
-        """Set up webhook for a repository."""
-        config = {
-            "url": "YOUR_WEBHOOK_URL",  # TODO: Configure webhook URL
-            "content_type": "json",
-            "secret": self.webhook_secret,
-        }
+    async def unwatch_repository(self, repo_name: str) -> None:
+        """Stop watching a repository.
 
+        Args:
+            repo_name: Repository name (owner/repo)
+        """
+        repos = self._load_data()
+        repos = [r for r in repos if r["name"] != repo_name]
+        self._save_data(repos)
+        logger.info(f"Stopped watching {repo_name}")
+
+    async def check_repository(self, repo_data: RepoData) -> None:
+        """Check a repository for changes.
+
+        Args:
+            repo_data: Repository data
+        """
         try:
-            # Create hook synchronously since PyGithub doesn't support async
-            repo.create_hook("web", config, events=["push", "repository"], active=True)
-            logger.info(f"Webhook created for {repo.full_name}")
-        except Exception as e:
-            logger.error(f"Error creating webhook: {e}")
-            raise
+            plugin = GitHubPlugin(repo_data["url"])
+            await plugin.prepare()
 
-    async def _trigger_reindex(self, repo_name: str, commit_sha: str) -> None:
-        """Trigger reindexing of a repository."""
-        try:
-            logger.info(f"Reindexing {repo_name} at commit {commit_sha}")
+            # TODO: Implement commit hash checking in GitHubPlugin
+            # For now, we'll just process the repository
+            logger.info(f"Processing repository {repo_data['name']}")
+            await self.processor.process_source(plugin, self.console)
 
-            # Get repository URL from stored info
-            repo_info = self.watched_repos.get(repo_name)
-            if not repo_info:
-                logger.error(f"Repository {repo_name} not found in watched repos")
-                return
-
-            # Create GitHub plugin instance
-            plugin = GitHubPlugin(repo_info["url"])
-
-            # Process the repository
-            await self.processor.process_source(plugin)
-
-            # Update stored commit hash
-            self.watched_repos[repo_name]["last_commit"] = commit_sha
-            self.watched_repos[repo_name]["last_indexed"] = datetime.utcnow()
-
-            logger.info(f"Successfully reindexed {repo_name} at {commit_sha}")
+            # Update last checked time
+            repos = self._load_data()
+            for repo in repos:
+                if repo["name"] == repo_data["name"]:
+                    repo["last_checked"] = datetime.now(timezone.utc).isoformat()
+                    break
+            self._save_data(repos)
 
         except Exception as e:
-            logger.error(f"Error reindexing {repo_name}: {e}")
-            # Keep the old commit hash since reindex failed
-            self.watched_repos[repo_name]["last_error"] = str(e)
-            self.watched_repos[repo_name]["last_error_time"] = datetime.utcnow()
+            logger.error(f"Error checking repository {repo_data['name']}: {e}")
+            # Update error info
+            repos = self._load_data()
+            for repo in repos:
+                if repo["name"] == repo_data["name"]:
+                    repo["last_error"] = str(e)
+                    repo["last_error_time"] = datetime.now(timezone.utc).isoformat()
+                    break
+            self._save_data(repos)
 
-    async def _remove_repository(self, repo_name: str) -> None:
-        """Remove a repository from watching."""
-        if repo_name in self.watched_repos:
-            del self.watched_repos[repo_name]
-            # TODO: Clean up associated data (webhooks, indexes, etc)
-            logger.info(f"Removed repository: {repo_name}")
+    async def check_all_repositories(self) -> None:
+        """Check all watched repositories for changes."""
+        repos = self._load_data()
+        for repo in repos:
+            await self.check_repository(repo)
 
-    async def check_for_updates(self) -> None:
-        """Periodically check watched repositories for updates."""
+    async def start(self, host: str = "0.0.0.0", port: int = 8000) -> None:
+        """Start the watcher server.
+
+        Args:
+            host: Host to bind to
+            port: Port to listen on
+        """
+        app = web.Application()
+        app.router.add_post("/webhook", self._handle_webhook)
+
+        # Start periodic checks
+        asyncio.create_task(self._periodic_check())
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+        logger.info(f"Watcher server running on http://{host}:{port}")
+
+        # Keep the server running
         while True:
-            for repo_name, info in self.watched_repos.items():
-                try:
-                    repo = self.github.get_repo(repo_name)
-                    latest_commit = repo.get_branch(info["default_branch"]).commit.sha
+            await asyncio.sleep(3600)
 
-                    if latest_commit != info["last_commit"]:
-                        logger.info(f"Update detected in {repo_name}")
-                        await self._trigger_reindex(repo_name, latest_commit)
-                        self.watched_repos[repo_name]["last_commit"] = latest_commit
+    async def _periodic_check(self, interval: int = 300) -> None:
+        """Periodically check repositories for changes.
 
-                except Exception as e:
-                    logger.error(f"Error checking {repo_name} for updates: {e}")
+        Args:
+            interval: Check interval in seconds
+        """
+        while True:
+            await self.check_all_repositories()
+            await asyncio.sleep(interval)
 
-                self.watched_repos[repo_name]["last_checked"] = datetime.utcnow()
+    async def _handle_webhook(self, request: web.Request) -> web.Response:
+        """Handle GitHub webhook requests.
 
-            await asyncio.sleep(300)  # Check every 5 minutes
+        Args:
+            request: Web request
 
-    def get_watched_repositories(self) -> List[Dict]:
-        """Get list of currently watched repositories."""
-        return [
-            {"name": repo_name, **repo_info}
-            for repo_name, repo_info in self.watched_repos.items()
-        ]
+        Returns:
+            Web response
+        """
+        try:
+            # Verify GitHub signature
+            signature = request.headers.get("X-Hub-Signature-256")
+            if not signature:
+                return web.Response(status=400, text="No signature")
 
-    async def start(self, host: str = "0.0.0.0", port: int = 8000):
-        """Start the webhook server and update checker."""
-        # Start update checker in the background
-        asyncio.create_task(self.check_for_updates())
+            # Get payload
+            data = await request.json()
+            payload = cast(WebhookPayload, data)
+            repo_name = payload["repository"]["full_name"]
 
-        # Start webhook server
-        config = uvicorn.Config(self.app, host=host, port=port)
-        server = uvicorn.Server(config)
-        await server.serve()
+            # Check if we're watching this repo
+            repos = self._load_data()
+            repo_data = None
+            for repo in repos:
+                if repo["name"] == repo_name:
+                    repo_data = repo
+                    break
+
+            if repo_data:
+                await self.check_repository(repo_data)
+                return web.Response(text="OK")
+            else:
+                return web.Response(status=404, text="Repository not found")
+
+        except Exception as e:
+            logger.error(f"Error handling webhook: {e}")
+            return web.Response(status=500, text=str(e))

@@ -119,11 +119,19 @@ index ingest local /path/to/code --exclude 'node_modules,dist'
 
 ### GitHub Repository Indexing
 ```bash
-# Index a repository
-index ingest github https://github.com/username/repo
+# Index a single repository
+index ingest github https://github.com/user/repo
 
-# Index specific branch
-index ingest github org/repo --branch main
+# Index multiple repositories at once
+index ingest github https://github.com/user/repo1 https://github.com/user/repo2
+
+# Index and watch for changes
+index ingest github https://github.com/user/repo --watch
+```
+
+To add a source with a specific branch:
+```bash
+index sources add github https://github.com/user/repo --branch main
 ```
 
 ### Searching Code

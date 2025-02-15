@@ -1,6 +1,6 @@
 """Code Analysis Plugins for advanced code understanding and metrics."""
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..base import BasePlugin

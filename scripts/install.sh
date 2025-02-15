@@ -21,12 +21,24 @@ print_error() {
     echo -e "${RED}Error:${NC} $1"
 }
 
+# Function to clean cache directories
+clean_caches() {
+    print_step "Cleaning cache directories..."
+    rm -rf .mypy_cache/
+    rm -rf .pytest_cache/
+    rm -rf .ruff_cache/
+    rm -rf .uv/
+    rm -rf __pycache__/
+    find . -type d -name "__pycache__" -exec rm -rf {} +
+}
+
 # Function to update dependencies
 update_deps() {
     print_step "Updating dependencies..."
     # shellcheck source=/dev/null
     source .venv/bin/activate
     uv pip install -r requirements.txt
+    clean_caches
 }
 
 # Parse command line arguments
@@ -48,6 +60,9 @@ if [ ! -f "requirements.txt" ]; then
 fi
 
 print_step "Setting up Python environment..."
+
+# Clean any existing cache directories
+clean_caches
 
 # Install uv if not already installed
 print_step "Installing/updating uv..."

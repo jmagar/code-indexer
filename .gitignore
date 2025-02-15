@@ -16,80 +16,114 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+cover/
+.ruff_cache/
 
 # Virtual Environment
-venv/
-env/
-ENV/
 .env
 .venv
-.python-version
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.virtualenv/
+.virtualenvs/
+virtualenv/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 .project
 .pydevproject
 .settings/
 *.sublime-workspace
 *.sublime-project
 
-# Logs and databases
+# Type Checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# Testing
+test/
+tests/
+cypress/
+e2e/
+__snapshots__/
+*.test.*
+*.spec.*
+.pytest_cache/
+.pytest.cache/
+.coverage/
+coverage/
+htmlcov/
+
+# JavaScript/Web
+node_modules/
+.next/
+.nuxt/
+dist/
+build/
+*.min.js
+*.min.css
+*.map
+coverage/
+.cache/
+
+# Logs and Databases
 *.log
 logs/
+log/
 *.sqlite
 *.db
-qdrant_storage/
+*.sqlite3
+data/
+storage/
+wal/
+snapshots/
 
-# Testing and Cache
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.mypy_cache/
-.ruff_cache/
-.uv/
-*cache*/
-
-# Distribution / packaging
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Temporary files
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
 *.bak
 *.tmp
 *~
-.DS_Store
-Thumbs.db
 
 # Project specific
-temp/
-.cache/
+.indexer/
+watched_repos/
+qdrant_data/
+.qdrant/
 embeddings/
 vectors/
-.qdrant/ 
+temp/
+.cache/
+.uv/
+.benchmarks/
+.ipynb_checkpoints/
+*.ipynb
+.envrc
+.direnv/
+.hatch/
+__pypackages__/ 

@@ -9,20 +9,14 @@ from pathlib import Path
 script_dir = Path(__file__).parent.parent
 sys.path.append(str(script_dir))
 
-import processor
+from cli.commands import main
 
-
-def main() -> None:
-    """Run the main indexer function."""
+if __name__ == "__main__":
     try:
-        asyncio.run(processor.main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")
         sys.exit(1)
     except Exception as e:
         print(f"\nError: {e}", file=sys.stderr)
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

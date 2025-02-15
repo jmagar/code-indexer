@@ -3,7 +3,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse
 
 from git import Repo
@@ -32,19 +32,66 @@ class GitHubPlugin(CodeSourcePlugin):
     def __init__(self, repo_url: str):
         """Initialize with GitHub repository URL."""
         self.repo_url = repo_url
-        self.work_dir = None
-        self.repo_info = None
-        self._supported_extensions = {".py", ".js", ".ts", ".jsx", ".tsx"}
+        self.work_dir: Optional[Path] = None
+        self.repo_info: Optional[RepoInfo] = None
+        self._supported_extensions = {
+            ".py",
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".md",
+            ".mdx",
+            ".markdown",
+        }
         self._ignore_patterns = {
+            # Development environments and dependencies
             "**/node_modules/**",
             "**/__pycache__/**",
             "**/venv/**",
+            "**/.venv/**",
+            "**/env/**",
+            "**/.env/**",
+            "**/.virtualenv/**",
+            "**/.virtualenvs/**",
+            "**/virtualenv/**",
+            # Version control
             "**/.git/**",
+            "**/.svn/**",
+            "**/.hg/**",
+            # Cache directories
+            "**/.mypy_cache/**",
+            "**/.pytest_cache/**",
+            "**/.ruff_cache/**",
+            "**/.uv/**",
+            "**/.cache/**",
+            "**/*.pyc",
+            "**/*.pyo",
+            "**/*.pyd",
+            # Build and distribution
             "**/dist/**",
             "**/build/**",
+            "**/*.egg-info/**",
             "**/*.min.js",
+            "**/*.min.css",
+            "**/*.map",
+            # Test files
+            "**/test/**",
+            "**/tests/**",
             "**/*.test.*",
             "**/*.spec.*",
+            # IDE
+            "**/.idea/**",
+            "**/.vscode/**",
+            "**/.vs/**",
+            "**/*.sublime-*",
+            # Project specific
+            "**/temp/**",
+            "**/tmp/**",
+            "**/embeddings/**",
+            "**/vectors/**",
+            "**/.qdrant/**",
+            "**/qdrant_storage/**",
         }
 
     @property
@@ -88,7 +135,7 @@ class GitHubPlugin(CodeSourcePlugin):
         # Clone repository
         logger.info(f"Cloning repository: {self.repo_url}")
         try:
-            repo = Repo.clone_from(self.repo_url, self.work_dir)
+            repo = Repo.clone_from(self.repo_url, str(self.work_dir))
             # Get repository information
             self.repo_info = RepoInfo(
                 url=self.repo_url,
@@ -104,10 +151,10 @@ class GitHubPlugin(CodeSourcePlugin):
         except Exception as e:
             # Clean up on failure
             if self.work_dir and self.work_dir.exists():
-                shutil.rmtree(self.work_dir)
+                shutil.rmtree(str(self.work_dir))
             raise ValueError(f"Failed to clone repository: {e}")
 
-    def get_chunk_metadata(self, filepath: str, file_hash: str) -> Dict:
+    def get_chunk_metadata(self, filepath: str, file_hash: str) -> Dict[str, Any]:
         """Get metadata for a chunk including repository information."""
         if not self.repo_info:
             raise ValueError(
@@ -130,7 +177,7 @@ class GitHubPlugin(CodeSourcePlugin):
 
     async def get_files(self) -> List[Path]:
         """Get all code files from cloned repository."""
-        if not self.work_dir or not self.work_dir.exists():
+        if not self.work_dir:
             raise ValueError("Repository not cloned. Call prepare() first.")
 
         all_files = []
@@ -144,7 +191,7 @@ class GitHubPlugin(CodeSourcePlugin):
         """Remove temporary directory."""
         if self.work_dir and self.work_dir.exists():
             logger.info(f"Cleaning up temporary directory: {self.work_dir}")
-            shutil.rmtree(self.work_dir)
+            shutil.rmtree(str(self.work_dir))
             self.work_dir = None
 
     def _should_process_file(self, file: Path) -> bool:

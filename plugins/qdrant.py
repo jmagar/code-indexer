@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional
+from typing_extensions import TypeAlias
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from qdrant_client.http.models import FieldCondition
 
 from .base import CodeSearchPlugin
 from .logger import IndexerLogger
@@ -16,6 +17,17 @@ load_dotenv()
 
 # Configure logging
 logger = IndexerLogger(__name__).get_logger()
+
+# Type alias for conditions
+Condition: TypeAlias = (
+    FieldCondition
+    | models.IsEmptyCondition
+    | models.IsNullCondition
+    | models.HasIdCondition
+    | models.HasVectorCondition
+    | models.NestedCondition
+    | models.Filter
+)
 
 
 class QdrantSearchPlugin(CodeSearchPlugin):
@@ -43,7 +55,7 @@ class QdrantSearchPlugin(CodeSearchPlugin):
         self.qdrant_api_key = qdrant_api_key or os.getenv("QDRANT_API_KEY")
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.qdrant_client = qdrant_client
-        self.openai_client = None
+        self.openai_client: Optional[AsyncOpenAI] = None
 
     @property
     def name(self) -> str:
@@ -68,7 +80,7 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 url=self.qdrant_url,
                 api_key=self.qdrant_api_key,
                 timeout=30,
-                verify=False  # Suppress SSL warnings for local connections
+                verify=False,  # Suppress SSL warnings for local connections
             )
         self.openai_client = AsyncOpenAI(api_key=self.openai_api_key)
 
@@ -104,26 +116,25 @@ class QdrantSearchPlugin(CodeSearchPlugin):
         # Build filter if paths provided
         search_filter = None
         if filter_paths:
-            path_conditions = []
+            path_conditions: List[Condition] = []
             for path in filter_paths:
                 # Convert path to lowercase for case-insensitive matching
                 path_lower = path.lower()
                 # Search in filepath and repository name if available
-                path_conditions.extend(
-                    [
+                conditions: List[Condition] = [
+                    models.FieldCondition(
+                        key="metadata.filepath",
+                        match=models.MatchText(text=path_lower),
+                    )
+                ]
+                if "repo" in path_lower:
+                    conditions.append(
                         models.FieldCondition(
-                            key="metadata.filepath", 
-                            match=models.MatchText(text=path_lower)
-                        ),
-                        models.FieldCondition(
-                            key="metadata.repo.name", 
-                            match=models.MatchText(text=path_lower)
+                            key="metadata.repo.name",
+                            match=models.MatchText(text=path_lower),
                         )
-                        if "repo" in path_lower
-                        else None,
-                    ]
-                )
-            path_conditions = [c for c in path_conditions if c is not None]
+                    )
+                path_conditions.extend(conditions)
             if path_conditions:
                 search_filter = models.Filter(should=path_conditions)
 
@@ -132,24 +143,20 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             todo_filter = models.Filter(
                 should=[
                     models.FieldCondition(
-                        key="metadata.has_todo",
-                        match=models.MatchValue(value=True)
+                        key="metadata.has_todo", match=models.MatchValue(value=True)
                     ),
                     models.FieldCondition(
-                        key="metadata.is_comment",
-                        match=models.MatchValue(value=True)
-                    )
+                        key="metadata.is_comment", match=models.MatchValue(value=True)
+                    ),
                 ]
             )
             if search_filter:
-                search_filter = models.Filter(
-                    must=[search_filter, todo_filter]
-                )
+                search_filter = models.Filter(must=[search_filter, todo_filter])
             else:
                 search_filter = todo_filter
 
         # Search in Qdrant
-        response = self.qdrant_client.search(
+        search_results = self.qdrant_client.search(
             collection_name=self.collection_name,
             query_vector=query_vector,
             query_filter=search_filter,
@@ -161,7 +168,7 @@ class QdrantSearchPlugin(CodeSearchPlugin):
 
         # Format results
         results = []
-        for point in response:
+        for point in search_results:
             # Skip if payload is missing
             if not point.payload:
                 continue
@@ -176,13 +183,26 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             if not isinstance(metadata, dict):
                 continue
 
+            # Get the full context
+            start_line = metadata.get("start_line", 0)
+            end_line = metadata.get("end_line", 0)
+
+            # Add context markers
+            context_lines = []
+            if start_line > 0:
+                context_lines.append("...")
+            context_lines.extend(code.split("\n"))
+            if end_line > start_line:
+                context_lines.append("...")
+            code_with_context = "\n".join(context_lines)
+
             # Build result with context
             result = {
                 "score": point.score,
                 "filepath": metadata.get("filepath", "unknown"),
-                "code": code,
-                "start_line": metadata.get("start_line", 0),
-                "end_line": metadata.get("end_line", 0),
+                "code": code_with_context,
+                "start_line": start_line,
+                "end_line": end_line,
                 "source": metadata.get("source", "unknown"),
                 "file_type": metadata.get("file_type", "unknown"),
                 "metadata": metadata,  # Include full metadata for display
