@@ -153,14 +153,16 @@ class SearchManager:
                     numbered_lines = []
 
                     # Add a header line to show context
-                    if start_line > 0:
+                    if start_line > 1:
                         numbered_lines.append("     ┄ (previous lines)")
 
                     # Add the actual code lines with numbers
                     for i, line in enumerate(lines, start=start_line):
                         # Add line numbers with proper padding
                         line_num = f"{i:4d}"
-                        if i == start_line:
+                        if i == start_line and i == end_line:
+                            numbered_lines.append(f"{line_num} ─ {line}")
+                        elif i == start_line:
                             numbered_lines.append(f"{line_num} ┌ {line}")
                         elif i == end_line:
                             numbered_lines.append(f"{line_num} └ {line}")

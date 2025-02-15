@@ -176,11 +176,13 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             # Skip if code is too short or empty
             code = point.payload.get("text", "").strip()
             if len(code) < 10:
+                logger.debug(f"Skipping short code: {len(code)} chars")
                 continue
 
             # Get metadata safely
             metadata = point.payload.get("metadata", {})
             if not isinstance(metadata, dict):
+                logger.debug("Skipping invalid metadata")
                 continue
 
             # Get the full context
@@ -191,6 +193,7 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             lines = code.split("\n")
 
             # Remove empty lines at the start and end
+            original_line_count = len(lines)
             while lines and not lines[0].strip():
                 lines.pop(0)
                 start_line += 1
@@ -198,8 +201,13 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 lines.pop()
                 end_line -= 1
 
+            logger.debug(
+                f"Lines after cleanup: {len(lines)} (was {original_line_count})"
+            )
+
             # Ensure we have at least 3 lines of context
             if len(lines) < 3:
+                logger.debug("Skipping result with less than 3 lines")
                 continue
 
             # Build result with context
@@ -208,11 +216,15 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 "filepath": metadata.get("filepath", "unknown"),
                 "code": "\n".join(lines),
                 "start_line": start_line,
-                "end_line": end_line,
+                "end_line": start_line + len(lines) - 1,  # Fix end line calculation
                 "source": metadata.get("source", "unknown"),
                 "file_type": metadata.get("file_type", "unknown"),
                 "metadata": metadata,  # Include full metadata for display
             }
+
+            logger.info(
+                f"Found match in {result['filepath']} (score: {point.score:.2f}, lines: {len(lines)})"
+            )
 
             # Add repository info if available
             repo = metadata.get("repo")
