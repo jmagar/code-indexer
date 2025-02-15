@@ -186,8 +186,8 @@ class QdrantSearchPlugin(CodeSearchPlugin):
 
             # Skip if code is too short or empty
             code = point.payload.get("text", "").strip()
-            if len(code) < 10:
-                logger.debug(f"Skipping short code: {len(code)} chars")
+            if not code:
+                logger.debug("Skipping empty code")
                 continue
 
             # Get metadata safely
@@ -216,9 +216,9 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 f"Lines after cleanup: {len(lines)} (was {original_line_count})"
             )
 
-            # Ensure we have at least 3 lines of context
-            if len(lines) < 3:
-                logger.debug("Skipping result with less than 3 lines")
+            # Skip if we have no content
+            if not lines:
+                logger.debug("Skipping empty result after cleanup")
                 continue
 
             # Build result with context
