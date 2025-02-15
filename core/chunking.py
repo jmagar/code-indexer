@@ -119,13 +119,25 @@ def create_chunks(content: str, filepath: str, source: str) -> List[Chunk]:
         max_chars = settings.MAX_TOKENS * settings.CHARS_PER_TOKEN
         if len(potential_chunk) > max_chars:
             if current_chunk:  # Only create chunk if we have content
-                chunk_text = "\n".join(current_chunk)
+                # Try to find a good split point (end of function/class)
+                split_point = len(current_chunk)
+                for j in range(len(current_chunk) - 1, -1, -1):
+                    if (
+                        current_chunk[j]
+                        .strip()
+                        .startswith(("def ", "class ", "async def "))
+                    ):
+                        split_point = j
+                        break
+
+                # Create chunk with context
+                chunk_text = "\n".join(current_chunk[:split_point])
                 chunk = {
                     "text": chunk_text,
                     "metadata": {
                         "filepath": filepath,
                         "start_line": start_line,
-                        "end_line": i,
+                        "end_line": start_line + split_point,
                         "source": source,
                         "origin": origin,
                         "file_type": Path(filepath).suffix[1:],
@@ -136,10 +148,10 @@ def create_chunks(content: str, filepath: str, source: str) -> List[Chunk]:
                 }
                 chunks.append(chunk)
 
-                # Start new chunk with current line
-                current_chunk = [line]
-                current_size = len(line.split())
-                start_line = i
+                # Start new chunk with remaining lines and current line
+                current_chunk = current_chunk[split_point:] + [line]
+                current_size = sum(len(l.split()) for l in current_chunk)
+                start_line = start_line + split_point
             else:
                 # Line itself is too long, need to split it
                 while line:
