@@ -196,11 +196,16 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 logger.debug("Skipping invalid metadata")
                 continue
 
-            # Skip comments unless explicitly searching for them
+            # Skip comments unless explicitly searching for them or if it's a docstring
             is_comment = metadata.get("is_comment", False)
             if is_comment and "comment" not in query.lower():
-                logger.debug("Skipping comment (not searching for comments)")
-                continue
+                first_line = code.split("\n")[0].strip()
+                is_docstring = first_line.startswith('"""') or first_line.startswith(
+                    "'''"
+                )
+                if not is_docstring:
+                    logger.debug("Skipping comment (not searching for comments)")
+                    continue
 
             # Get the full context
             start_line = metadata.get("start_line", 0)
@@ -227,10 +232,12 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 logger.debug("Skipping empty result after cleanup")
                 continue
 
-            # Skip if it's just a single-line comment or heading
+            # Skip if it's just a single-line comment or heading (but keep docstrings)
             if len(lines) == 1:
                 line = lines[0].strip()
-                if line.startswith("#") or line.startswith("//"):
+                if (line.startswith("#") or line.startswith("//")) and not (
+                    line.startswith('"""') or line.startswith("'''")
+                ):
                     logger.debug("Skipping single-line comment or heading")
                     continue
 
