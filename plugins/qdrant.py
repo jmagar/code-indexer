@@ -200,11 +200,16 @@ class QdrantSearchPlugin(CodeSearchPlugin):
             is_comment = metadata.get("is_comment", False)
             if is_comment and "comment" not in query.lower():
                 first_line = code.split("\n")[0].strip()
-                is_docstring = first_line.startswith('"""') or first_line.startswith(
-                    "'''"
+                is_docstring = (
+                    first_line.startswith('"""')
+                    or first_line.startswith("'''")
+                    or "docstring" in query.lower()
+                    or "documentation" in query.lower()
                 )
                 if not is_docstring:
-                    logger.debug("Skipping comment (not searching for comments)")
+                    logger.debug(
+                        f"Skipping comment (not searching for comments): {first_line[:50]}..."
+                    )
                     continue
 
             # Get the full context
@@ -232,13 +237,17 @@ class QdrantSearchPlugin(CodeSearchPlugin):
                 logger.debug("Skipping empty result after cleanup")
                 continue
 
-            # Skip if it's just a single-line comment or heading (but keep docstrings)
+            # Skip if it's just a single-line comment (but keep docstrings)
             if len(lines) == 1:
                 line = lines[0].strip()
-                if (line.startswith("#") or line.startswith("//")) and not (
-                    line.startswith('"""') or line.startswith("'''")
-                ):
-                    logger.debug("Skipping single-line comment or heading")
+                is_docstring = (
+                    line.startswith('"""')
+                    or line.startswith("'''")
+                    or "docstring" in query.lower()
+                    or "documentation" in query.lower()
+                )
+                if (line.startswith("#") or line.startswith("//")) and not is_docstring:
+                    logger.debug(f"Skipping single-line comment: {line}")
                     continue
 
             # Build result with context
